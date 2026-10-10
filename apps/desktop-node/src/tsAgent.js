@@ -347,6 +347,9 @@ class TsAgentHost {
       await fs.promises.unlink(path.join(sessionsHome(), `${sid}.jsonl`));
       return { ok: true, sessionId: sid, deleted: true };
     } catch (e) {
+      /* 文件本就不在（从未落盘 / 已被删过）：删除是**幂等**的——目标是"它不在了"，
+         这一点已经达成，不能报成失败。否则侧栏那条没有会话文件的幽灵任务永远删不掉。 */
+      if (e && e.code === 'ENOENT') return { ok: true, sessionId: sid, deleted: true };
       return { ok: false, reason: `删除失败：${(e && e.message) || e}` };
     }
   }

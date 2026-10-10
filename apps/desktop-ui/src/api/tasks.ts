@@ -293,6 +293,12 @@ export interface DeleteTasksResult {
   missing: string[];
 }
 
+/** 会话本就不在（从未落盘 / 已被删）：删除等于已经达成，归入 missing 交调用方本地剔除。 */
+function isGoneReason(reason: unknown): boolean {
+  const s = String(reason || '');
+  return s.includes('不合法') || s.includes('不存在') || /ENOENT|no such file/i.test(s);
+}
+
 export async function deleteTasks(ids: string[]): Promise<DeleteTasksResult> {
   const deleted: string[] = [];
   const skipped: { id: string; title: string; state: string }[] = [];
@@ -301,7 +307,7 @@ export async function deleteTasks(ids: string[]): Promise<DeleteTasksResult> {
   for (const id of ids) {
     const r = await tsSessionDelete(id).catch(() => ({ ok: false, reason: '删除失败' }));
     if (r.ok) deleted.push(id);
-    else if (String(r.reason || '').includes('不合法') || String(r.reason || '').includes('不存在')) missing.push(id);
+    else if (isGoneReason(r.reason)) missing.push(id);
     else skipped.push({ id, title: id, state: String(r.reason || '删除失败') });
   }
   return { deleted, skipped, missing };

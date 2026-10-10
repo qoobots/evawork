@@ -280,14 +280,17 @@ export const useUiStore = defineStore('ui', {
      */
     async removeTasks(ids: string[]): Promise<DeleteTasksResult> {
       const res = await deleteTasksApi(ids);
-      const gone = new Set(res.deleted);
-      /* 临时条目（`t-`，还没落成会话文件）没有东西可删，本地剔除即可；
-         真会话的删除已由上面落盘，失败（如正在跑）的留在 skipped 里，绝不在这里假装删掉。 */
+      /* deleted = 已落盘删掉；missing = 会话本就不在（幽灵条目）。两者都不该再留在侧栏——
+         否则下次 `refreshTasks` 又从本地持久化读回来，删了等于没删。
+         临时条目（`t-`，还没落成会话文件）没有东西可删，本地剔除即可；
+         真正失败（如被占用）的留在 skipped 里，绝不在这里假装删掉。 */
+      const gone = new Set<string>([...res.deleted, ...res.missing]);
       const tempIds = ids.filter((id) => !isTsTaskId(id));
       for (const id of tempIds) gone.add(id);
       this.tasks = this.tasks.filter((t) => !gone.has(t.id));
       this.persist();
-      return { ...res, deleted: [...res.deleted, ...tempIds] };
+      // 对界面而言 missing 与 deleted 都是"这条没了"，一并回报，调用方好清理选中态与路由
+      return { ...res, deleted: [...res.deleted, ...res.missing, ...tempIds] };
     },
   },
 });
