@@ -16,9 +16,7 @@ import { newTaskSeq } from '@/stores/newTaskBus';
 import { bridgeAvailable, onBackend, onShortcut } from '@/api/backend';
 import { useVoiceInput } from '@/composables/useVoiceInput';
 import {
-  approveTask,
   cancelTask,
-  approvalCode,
   createTask,
   appendTaskMessage,
   fetchFollowup,
@@ -102,9 +100,6 @@ const prompt = ref('');
 const inputRef = ref<HTMLInputElement>();
 
 const plusOpen = ref(false);
-const approvalOpen = ref(false);
-// 任务审批档位：传给 Python 后端建任务（见 approvalCode）。TS 智能体不再有审批概念。
-const approval = ref('手动审批');
 const modelOpen = ref(false);
 const model = ref('auto'); // T-140：默认「自动选择模型」，按任务类型匹配档位
 
@@ -118,7 +113,7 @@ const model = ref('auto'); // T-140：默认「自动选择模型」，按任务
    在 preload 已注入地址时会**同步**回调，那时下面那行还没执行到，直接 TDZ 报错。 */
 const useTs = ref(true);
 
-/* 输入栏三个下拉的开关。同一时刻只开一层：+ 菜单（及其二级面板）、审批、模型
+/* 输入栏下拉的开关。同一时刻只开一层：+ 菜单（及其二级面板）、模型
    都是贴着输入框往上弹的，同时开会互相盖住，窗口一矮就顶出视口。 */
 function togglePlus() {
   const next = !plusOpen.value;
@@ -126,20 +121,13 @@ function togglePlus() {
   plusOpen.value = next;
   if (next) void loadSkills();
 }
-function toggleApproval() {
-  const next = !approvalOpen.value;
-  closeComposerPops();
-  approvalOpen.value = next;
-}
 function toggleModel() {
   const next = !modelOpen.value;
   closeComposerPops();
   modelOpen.value = next;
 }
 
-/* S-08 / S-12：审批默认档与"结束提醒"都读设置 KV。
-   此前这两处跟设置页完全脱节：审批永远是 hardcoded 的「手动审批」，
-   通知/声音开关存了但没人听——任务跑完用户只能自己盯着界面。 */
+/* S-08 / S-12：「结束提醒」（通知/声音）读设置 KV。 */
 const prefs = ref({ notify: true, sound: true, volume: 50 });
 
 async function loadPrefs() {
@@ -150,8 +138,6 @@ async function loadPrefs() {
     if (typeof tg.notify === 'boolean') prefs.value.notify = tg.notify;
     if (typeof tg.sound === 'boolean') prefs.value.sound = tg.sound;
     if (typeof d.volume === 'number') prefs.value.volume = d.volume;
-    const ap = typeof tg.approvalRegular === 'string' ? tg.approvalRegular : '';
-    if (!useTs.value && ap && ap !== '自定义配置') approval.value = ap;
   } catch {
     /* 拿不到设置就沿用默认值：偏好读不出来不该拦住用户发任务 */
   }
@@ -312,7 +298,6 @@ const steps = ref<Step[]>([]);
 const output = ref('');
 const artifacts = ref<Artifact[]>([]);
 const errMsg = ref('');
-const approvalMsg = ref('');
 const taskId = ref('');
 /** 侧栏条目的临时 id：createTask 拿到真实任务 id 后替换，点侧栏才能回显。 */
 const sidebarKeyRef = ref('');
@@ -669,7 +654,7 @@ async function ingest(paths: string[]) {
   attachBusy.value = true;
   attachMsg.value = '';
   try {
-    const r = await attachPaths(paths, approvalCode(approval.value));
+    const r = await attachPaths(paths);
     attachments.value = [...attachments.value, ...r.items];
     if (!wsRoot.value) await loadWorkspaceRoot();
     await Promise.all(
@@ -735,7 +720,6 @@ function closeComposerPops() {
   shotPanel.value = false;
   hoverPluginName.value = '';
   modelOpen.value = false;
-  approvalOpen.value = false;
   skillQ.value = '';
 }
 /** 点菜单外面 / 按 Esc 都要能收摊：以前只能再点一次按钮，菜单一开就把整屏盖住。 */
@@ -796,7 +780,6 @@ function resetRun() {
   skillName.value = '';
   skillTools.value = [];
   errMsg.value = '';
-  approvalMsg.value = '';
   taskId.value = '';
   hitLimit.value = false;
   usage.value = null;
@@ -919,10 +902,6 @@ async function openTask(id: string) {
       if (!['failed', 'error'].includes(t.state)) {
         hitLimit.value = false;
         errMsg.value = '';
-      }
-      if (t.state === 'waiting_approval') {
-        runState.value = 'waiting_approval';
-        approvalMsg.value = '该任务正在等待审批，可在下方继续处理';
       }
     }
   } catch (e) {
@@ -1172,7 +1151,6 @@ async function runOnce(title: string, resume: boolean, skill = '') {
         title,
         mode: ui.mode,
         model: model.value,
-        approval: approval.value,
         skill,
         ...(prior.length ? { messages: [...prior, { role: 'user', content: title }] } : {}),
       });
@@ -1393,22 +1371,6 @@ function applyEvent(ev: StreamEvent) {
       // TS-065：上下文用量。**纯展示**——不动正文、不改 phase，只喂输入框下方那条监控
       usage.value = ev.usage;
       break;
-  }
-}
-
-async function decide(approved: boolean) {
-  if (!taskId.value) return;
-  approvalMsg.value = '';
-  try {
-    await approveTask(taskId.value, approved);
-    if (!approved) {
-      phase.value = 'done';
-      return;
-    }
-    await runOnce(runTitle.value, true);
-  } catch (e) {
-    phase.value = 'error';
-    errMsg.value = (e as Error).message || '审批失败';
   }
 }
 
@@ -1672,14 +1634,6 @@ async function loginAndRun() {
           <MarkdownView v-if="busy && streamBuf" class="ai-out" :source="streamBuf" :streaming="true" :breaks="true" />
           <MarkdownView v-else-if="output" class="ai-out" :source="output" :streaming="false" :breaks="true" />
 
-          <!-- 审批拦截 -->
-          <div v-if="phase === 'waiting'" class="run-approve">
-            <UIcon name="shield" :size="14" />
-            <span class="ap-msg">{{ approvalMsg }}</span>
-            <button class="ap-btn primary" @click="decide(true)">允许</button>
-            <button class="ap-btn" @click="decide(false)">跳过</button>
-          </div>
-
           <!-- 产物（可回写到「我的文件」，T-035；点击文件名预览，可再用系统程序打开） -->
           <div v-if="artifacts.length" class="run-arts">
             <div class="ra-t">产物（{{ artifacts.length }}）</div>
@@ -1910,36 +1864,6 @@ async function loginAndRun() {
             </div>
           </div>
 
-          <!-- 审批模式 -->
-          <div class="pop-wrap">
-            <button class="bar-btn wide" @click="toggleApproval">
-              <UIcon name="shield" :size="13" /> {{ approval }} <UIcon name="chevron-down" :size="11" />
-            </button>
-            <div v-if="approvalOpen" class="pop-menu" @click.stop>
-              <div class="pop-head">如何批准 Agent 的操作？ <a class="lnk">了解更多</a></div>
-              <div class="pop-item" :class="{ checked: approval === '手动审批' }" @click="approval = '手动审批'; approvalOpen = false">
-                <UIcon name="user" :size="14" /><div><b>手动审批</b><small>重要操作由你确认</small></div>
-              </div>
-              <div class="pop-item" :class="{ checked: approval === '自动审批' }" @click="approval = '自动审批'; approvalOpen = false">
-                <UIcon name="shield" :size="14" /><div><b>自动审批</b><small>由 AI 审核，必要时再询问你</small></div>
-              </div>
-              <!-- TS-062 只规划（plan mode）：写/命令/联网一律拒绝，先看方案再动手。
-                   只对 TS 智能体有效（Python 后端没有这一档，选它按手动审批跑） -->
-              <div
-                v-if="useTs"
-                class="pop-item"
-                :class="{ checked: approval === '只规划' }"
-                title="只规划不改文件：写文件、跑命令、联网都会被直接拒绝，先让它给方案"
-                @click="approval = '只规划'; approvalOpen = false"
-              >
-                <UIcon name="book" :size="14" /><div><b>只规划</b><small>先给方案，不动文件（TS 智能体）</small></div>
-              </div>
-              <div class="pop-item warn" :class="{ checked: approval === '完全访问' }" @click="approval = '完全访问'; approvalOpen = false">
-                <UIcon name="zap" :size="14" /><div><b>完全访问</b><small>不经审批，直接在本机运行</small></div>
-              </div>
-            </div>
-          </div>
-
           <!-- 插件快捷图标 -->
           <div class="plugin-dots">
             <span class="pd" style="background:#5b57d9"><UIcon name="video" :size="10" /></span>
@@ -2082,9 +2006,8 @@ async function loginAndRun() {
         <button class="local-chip" title="查看 agent 工作区的文件（只读）" @click="openWorkspaceFiles"><UIcon name="folder" :size="12" /> 工作区文件 <UIcon name="chevron-right" :size="10" /></button>
       </div>
 
-      <!-- T-089：工作区面板（文件树 + 预览 + 真 PTY 终端）。
-           终端按当前审批档位启动：档位不允许执行命令时后端会拒绝建立会话。 -->
-      <WorkspacePanel v-model:open="filesOpen" :approval="approvalCode(approval)" />
+      <!-- T-089：工作区面板（文件树 + 预览 + 真 PTY 终端）。 -->
+      <WorkspacePanel v-model:open="filesOpen" />
     </div>
 
     <!-- 产物预览：点产物名弹出；md 走 Markdown 渲染，图片直接显示，其余文本高亮/纯文本 -->

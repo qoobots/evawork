@@ -2,7 +2,7 @@
 //
 // 任务页原本只会走 Python 后端的 SSE（`api/tasks.ts` 的 `streamTask`）。
 // 这里做的事只有一件：把 TS 智能体的事件流**翻译成同一套 `StreamEvent`**，
-// 于是任务页那套（步骤 / 工具 / 叙述 / 审批 / 终态）不用重写一遍——
+// 于是任务页那套（步骤 / 工具 / 叙述 / 终态）不用重写一遍——
 // 换的是数据源，不是界面。
 //
 // 两条必须说清的边界：
@@ -10,7 +10,8 @@
 //      一律不调（各自独立存储，不能假装两边是同一份数据）。
 //      **例外**：撤销回滚点两边都有——TS 侧用自己的影子仓库（TS-060），
 //      撤销走主进程而不是后端接口，但界面上那张卡是同一张。
-//   2. **审批应答走后端**（`approveTask`）——TS 智能体不再有审批概念（见 agent-ts 精简）。
+//   2. **TS 智能体不再有审批概念**（见 agent-ts 精简）：审批 UI 已整体移除，
+//      历史任务回显仍走这套 StreamEvent，只是不再产生 `approval` / `approval_unattended` 帧。
 
 import type { ContextUsage, StreamEvent, Step, SubagentTrace, Task } from './tasks';
 import { cancelTsAgent, onTsAgent, replayTsAgent, tsAgentPrompt, type TsAgentPromptArgs } from './tsAgent';
@@ -72,7 +73,6 @@ function fakeTask(sessionId: string, title: string, state: string): Task {
     title,
     mode: 'ts',
     model: 'ts-agent',
-    approval: 'manual',
     state,
     steps: [],
     artifacts: [],
