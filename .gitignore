@@ -1,0 +1,22 @@
+node_modules/
+dist/
+target/
+.DS_Store
+*.local
+# 密钥与本地配置：绝不入库（模型 API Key 放 .env.local）
+.env
+.env.*
+!.env.example
+coverage/
+.vite/
+# 本地模型与索引不入库
+apps/desktop-ui/public/models/
+# Electron 打包产物（electron-builder 输出，体积大，不入库）
+apps/desktop-node/release/
+# 打包前实体化的依赖（构建产物，不入库）
+apps/desktop-node/.agent-deps/
+apps/desktop-node/.mcp-bundle/
+# 原生模块 / 本地构建产物
+*.tlog
+native/**/build/
+*.node
