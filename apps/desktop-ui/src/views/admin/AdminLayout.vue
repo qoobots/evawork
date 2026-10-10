@@ -24,7 +24,6 @@ const groups = computed(() => [
       { k: 'computer', label: i18n.t('电脑控制'), icon: 'monitor', to: '/admin/computer' },
       { k: 'worktree', label: i18n.t('工作树'), icon: 'folder', to: '/admin/worktree' },
       { k: 'context', label: i18n.t('上下文与记忆'), icon: 'book', to: '/admin/context' },
-      { k: 'agent', label: i18n.t('智能体'), icon: 'sparkle', to: '/admin/agent' },
       { k: 'mobile', label: i18n.t('EVA 移动端'), icon: 'phone', to: '/admin/mobile' },
       { k: 'beta', label: i18n.t('Beta'), icon: 'sliders', to: '/admin/beta' },
       { k: 'about', label: i18n.t('关于 EvaWork'), icon: 'info', to: '/admin/about' },

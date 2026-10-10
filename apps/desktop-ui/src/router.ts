@@ -36,7 +36,6 @@ export const router = createRouter({
         { path: 'model', component: () => import('@/views/admin/SettingsPane.vue') },
         { path: 'mobile', component: () => import('@/views/admin/SettingsPane.vue') },
         { path: 'context', component: () => import('@/views/admin/SettingsPane.vue') },
-        { path: 'agent', component: () => import('@/views/admin/SettingsPane.vue') },
         { path: 'beta', component: () => import('@/views/admin/SettingsPane.vue') },
         { path: 'about', component: () => import('@/views/admin/SettingsPane.vue') },
         // 账号与服务

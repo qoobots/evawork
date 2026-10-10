@@ -15,7 +15,6 @@ import { playChime, requestNotifyPermission, type ChimeKind } from '@/composable
 import { createWorktree, deleteWorktree, fetchWorktrees, pruneWorktrees, type WorktreeItem, type WorktreeState } from '@/api/worktree';
 import { browserShotURL, clearBrowserData, fetchBrowser, openInBrowser, type BrowserState } from '@/api/browser';
 import { addProvider, deleteProvider, fetchProviders, testProvider, testProviderDraft, updateProvider, type ProviderDraft, type ProviderItem } from '@/api/providers';
-import { tsAgentAvailable, tsAgentStatus } from '@/api/tsAgent';
 
 /* T-128：设置与管理控制台合并为一个界面（同一个深色壳、同一条侧栏）。
    这一页只承载"本机偏好"——改这台电脑 / EVA 怎么干活，落 /api/settings 的 kv；
@@ -58,24 +57,6 @@ const t = ref({
 const volume = ref(50);
 const worktreeGb = ref('5');
 
-/* 智能体只剩 TS 一套内核（Python 后端已废弃），这里只**展示状态**，没有可切换项。
-   状态仍要问主进程：子进程可能没起来（没登录 / 启动失败），
-   显示"运行中"却其实发不出任务，比不显示更糟。 */
-const agentRunning = ref(false);
-const agentMsg = ref('');
-const agentBridge = tsAgentAvailable();
-
-onMounted(() => {
-  void (async () => {
-    // 桥在但状态可能是旧的（比如刚启动还没拉起）：再问一次真实状态，别显示"运行中"骗人
-    if (!agentBridge) return;
-    const s = await tsAgentStatus().catch(() => null);
-    if (s) {
-      agentRunning.value = Boolean(s.running && s.ready);
-      agentMsg.value = agentRunning.value ? '' : i18nStore.t('TS 智能体未运行：需要登录 EVA 账号后才能调用模型。');
-    }
-  })();
-});
 /** S-23：AI 任务默认浏览器（内置浏览器 / 系统默认浏览器）——真决定 `open_url` 走哪条路 */
 const browserDefault = ref('系统默认浏览器');
 
@@ -1083,30 +1064,6 @@ async function onTraceToggle(on: boolean) {
           </div>
           <UToggle :model-value="t.trace" @update:model-value="(v: boolean) => onTraceToggle(v)" :title="i18nStore.t('勾上＝开留痕并自动打开 trace 目录')" />
         </div>
-      </div>
-    </template>
-
-    <!-- 智能体二选一（TS-052） -->
-    <template v-else-if="page === 'agent'">
-      <h1>{{ i18nStore.t('智能体') }}</h1>
-      <div class="s-card" style="margin-top: 16px">
-        <div class="s-row">
-          <div>
-            <div class="s-row-t">{{ i18nStore.t('智能体内核') }}</div>
-            <div class="s-row-d">
-              {{ i18nStore.t('只剩一套智能体内核：TS 智能体（零依赖 Node 运行时，工具 / 沙箱档位走同一份契约') }}
-              <span class="muted">（shared/agent-contract.json）</span>{{ i18nStore.t('。Python 后端已废弃，不再拉起。') }}
-            </div>
-          </div>
-        </div>
-
-        <div class="s-row">
-          <span class="muted small" style="margin-left: auto">
-            {{ agentRunning ? i18nStore.t('TS 智能体运行中') : i18nStore.t('TS 智能体未运行') }}
-          </span>
-        </div>
-        <p v-if="!agentBridge" class="update-note warn">{{ i18nStore.t('当前不在桌面安装版内（缺少主进程桥）：智能体不可用。') }}</p>
-        <p v-else-if="agentMsg" class="update-note" :class="agentMsg.includes('失败') || agentMsg.includes('未能') ? 'warn' : 'ok'">{{ agentMsg }}</p>
       </div>
     </template>
 

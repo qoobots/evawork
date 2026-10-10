@@ -152,18 +152,28 @@ function traceEnabled(): boolean {
 
 let traceSeq = 0
 
-/** 把一次模型请求发出的完整 body 落盘（包含 system 提示词与 messages）。失败静默。 */
+/** 把一次模型请求发出的 body 落盘（含 system 提示词与 messages）。失败静默。
+ *
+ *  **瘦身**：`tools` 的 schema 是文件体积的绝对大头——100+ 个插件 / 技能 / MCP 工具，
+ *  每个几十行 JSON，堆起来比整段对话还长；但它对本机几乎不变，调提示词时真正要看的是
+ *  messages。所以这里只留工具**名字**（外加一个数量），完整 schema 需要时去
+ *  shared/agent-contract.json 与 MCP 配置里查。 */
 function traceRequest(step: number | undefined, model: string, body: unknown): void {
   if (!traceEnabled()) return
   try {
     const dir = process.env.EVA_TS_TRACE_DIR?.trim() || path.join(homeDir(), "trace")
     fs.mkdirSync(dir, { recursive: true })
     const name = `req-${step ?? "x"}-${Date.now().toString(36)}-${++traceSeq}.json`
-    fs.writeFileSync(
-      path.join(dir, name),
-      JSON.stringify({ step: step ?? null, model, ...(body as Record<string, unknown>) }, null, 2),
-      "utf8",
-    )
+    const b = body as Record<string, unknown>
+    const slim: Record<string, unknown> = { step: step ?? null, model, ...b }
+    if (Array.isArray(b.tools)) {
+      slim.tools = b.tools.map((t) => {
+        const fn = t as { function?: { name?: string }; name?: string }
+        return fn?.function?.name ?? fn?.name ?? "?"
+      })
+      slim.toolsCount = b.tools.length
+    }
+    fs.writeFileSync(path.join(dir, name), JSON.stringify(slim, null, 2), "utf8")
   } catch {
     /* 留痕失败绝不影响主流程 */
   }
