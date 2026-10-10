@@ -36,8 +36,8 @@ import { useArtifactSave } from '@/composables/useArtifactSave';
 import { useToolRuns, type ToolRun } from '@/composables/useToolRuns';
 import { notifyTask, playChime, type ChimeKind } from '@/composables/useNotify';
 import { fetchSettings } from '@/api/settings';
-import { getAgentChoice, getApprovalMode, tsAgentAvailable, setApprovalMode, type ApprovalMode } from '@/api/tsAgent';
-import { answerTsPendingApproval, cancelTsAgentFor, isTsTaskId, replayTsTask, streamTsTask, tsSessionOf, tsTaskId } from '@/api/tsChannel';
+import { getAgentChoice, tsAgentAvailable } from '@/api/tsAgent';
+import { cancelTsAgentFor, isTsTaskId, replayTsTask, streamTsTask, tsSessionOf, tsTaskId } from '@/api/tsChannel';
 import { tsAgentContextUsage, fetchTsModels } from '@/api/tsAgent';
 import { fetchFileContent, fetchFileRoots, openFilePath, type FilePreview } from '@/api/files';
 import { attachPaths, attachmentPreview, captureScreen, pickFiles, removeAttachment, type Attachment } from '@/api/attachments';
@@ -103,16 +103,8 @@ const inputRef = ref<HTMLInputElement>();
 
 const plusOpen = ref(false);
 const approvalOpen = ref(false);
-const approval = ref('手动审批');/* 档位同步给主进程：TS 子进程的 policy 在**拉起那一刻**定死，档位若只在渲染层
-   本地打转，用户选"完全访问"TS 照样按 never 拒命令（界面选择静默失效）。
-   TS 模式下换档 = 主进程重启子进程（见 main.js 的 approval-mode-set）。 */
-watch(approval, (m) => {
-  /* 刻意**不**判 useTs：`loadPrefs()` 是异步的，用户改档位时 getAgentChoice() 可能还没回来，
-     那时跳过就等于这次选择没落盘——界面写着"完全访问"，主进程文件还停在"手动审批"，
-     子进程照旧按 ask 跑，web_fetch 还是弹审批（这个坑已经踩过两轮）。
-     写文件本身永远正确；要不要重启子进程由主进程判断（只在 TS 在跑且档位真变时）。 */
-  void setApprovalMode(m as ApprovalMode);
-});
+// 任务审批档位：传给 Python 后端建任务（见 approvalCode）。TS 智能体不再有审批概念。
+const approval = ref('手动审批');
 const modelOpen = ref(false);
 const model = ref('auto'); // T-140：默认「自动选择模型」，按任务类型匹配档位
 
@@ -159,10 +151,6 @@ async function loadPrefs() {
     if (typeof tg.sound === 'boolean') prefs.value.sound = tg.sound;
     if (typeof d.volume === 'number') prefs.value.volume = d.volume;
     const ap = typeof tg.approvalRegular === 'string' ? tg.approvalRegular : '';
-    /* 「自定义配置」在输入框的档位菜单里没有对应项（规则编辑器还没做），按 manual 呈现。
-       **TS 模式下不能用后端设置回填**：TS 子进程的 policy 由主进程按本机
-       approval-mode.json 拉起，后端这份对 TS 那套不生效。回填会把用户在本机选的
-       档位冲掉，再经 watch 写回文件——于是"界面写着完全访问、子进程跑 ask"。 */
     if (!useTs.value && ap && ap !== '自定义配置') approval.value = ap;
   } catch {
     /* 拿不到设置就沿用默认值：偏好读不出来不该拦住用户发任务 */
@@ -1015,14 +1003,6 @@ onMounted(() => {
   void (async () => {
     const c = await getAgentChoice().catch(() => ({ agent: 'py' as const, running: false }));
     useTs.value = c.agent === 'ts' && tsAgentAvailable();
-    /* 初次也要对齐：TS 档位的真相源是本机 approval-mode.json（主进程照它拉子进程），
-       所以先把它读回界面，再回写触发重启对齐。顺序反了就会用默认值
-       「手动审批」覆盖用户上次的选择——切一次档位 seemingly 生效、下次启动又失效。 */
-    if (useTs.value) {
-      const m = await getApprovalMode().catch(() => null);
-      if (m) approval.value = m;
-      await setApprovalMode(approval.value as ApprovalMode);
-    }
   })();
 });
 watch(
@@ -1237,7 +1217,6 @@ async function runTs(text: string, sessionId = '') {
     /* 发任务前把档位对齐到主进程。必须在**开跑之前**：档位一变主进程要重启子进程，
        那时这次会话还不存在，重启没有代价；等跑到一半再发现档位不对就晚了。
        （主进程 prompt 里也有一层兜底对齐，但那会让当前 sessionId 失效、追问丢上下文。） */
-    if (useTs.value) await setApprovalMode(approval.value as ApprovalMode);
     // TS 模式没有"创建任务"这个阶段（prompt 即执行）——挂 creating 会把
     // "创建任务中"这个徽章从开头挂到结束，用户以为卡死了。
     phase.value = 'streaming';
@@ -1372,17 +1351,6 @@ function applyEvent(ev: StreamEvent) {
     case 'artifact':
       artifacts.value.push(ev.artifact);
       break;
-    case 'approval':
-      approvalMsg.value = ev.message;
-      runState.value = 'waiting_approval';
-      phase.value = 'waiting';
-      break;
-    case 'approval_unattended':
-      // T-086：需要审批但没人应答 → 后端已 fail-closed 拒绝，这里必须把原因说清楚
-      approvalMsg.value = ev.message;
-      runState.value = 'failed';
-      phase.value = 'done';
-      break;
     case 'done':
       commitStreamAsAnswer();
       // partial：本轮有工具调用没做成——徽章与说明都要如实，不能显示全绿"已完成"
@@ -1432,16 +1400,6 @@ async function decide(approved: boolean) {
   if (!taskId.value) return;
   approvalMsg.value = '';
   try {
-    if (useTs.value) {
-      // TS 侧：把应答发给主进程里那个挂着的审批请求，turn 自己继续跑下去
-      await answerTsPendingApproval(tsSessionOf(taskId.value), approved);
-      if (!approved) {
-        phase.value = 'done';
-        return;
-      }
-      phase.value = 'streaming';
-      return;
-    }
     await approveTask(taskId.value, approved);
     if (!approved) {
       phase.value = 'done';

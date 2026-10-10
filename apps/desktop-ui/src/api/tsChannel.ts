@@ -10,10 +10,10 @@
 //      一律不调（各自独立存储，不能假装两边是同一份数据）。
 //      **例外**：撤销回滚点两边都有——TS 侧用自己的影子仓库（TS-060），
 //      撤销走主进程而不是后端接口，但界面上那张卡是同一张。
-//   2. **审批应答走主进程**（`approval/answer`），不是后端的 `/approve`。
+//   2. **审批应答走后端**（`approveTask`）——TS 智能体不再有审批概念（见 agent-ts 精简）。
 
 import type { ContextUsage, StreamEvent, Step, SubagentTrace, Task } from './tasks';
-import { answerTsAgentApproval, cancelTsAgent, onTsAgent, replayTsAgent, tsAgentPrompt, type TsAgentPromptArgs } from './tsAgent';
+import { cancelTsAgent, onTsAgent, replayTsAgent, tsAgentPrompt, type TsAgentPromptArgs } from './tsAgent';
 import type { TsAgentPayload } from './backend';
 
 /**
@@ -59,17 +59,6 @@ const CHANNEL_IDLE_MS = 300_000;
  */
 const BUDGET_STOPS = new Set(['max_steps', 'deadline', 'timeout', 'stalled']);
 
-/** 当前等待人工应答的审批请求（按会话记）。 */
-const pending = new Map<string, string>();
-
-/** 应答一次审批。与后端 `approveTask` 对应的 TS 入口。 */
-export async function answerTsPendingApproval(sessionId: string, granted: boolean): Promise<void> {
-  const requestId = pending.get(sessionId);
-  if (!requestId) return;
-  pending.delete(sessionId);
-  await answerTsAgentApproval(requestId, granted).catch(() => undefined);
-}
-
 /** 停止一轮（协作式：TS 侧在本步边界停下）。传任务页里的 taskId。 */
 export async function cancelTsAgentFor(taskId: string): Promise<void> {
   const sid = tsSessionOf(taskId);
@@ -93,13 +82,6 @@ function fakeTask(sessionId: string, title: string, state: string): Task {
 
 function stepOf(id: string, title: string, status: Step['status']): Step {
   return { id, title, status, action: '', detail: '' };
-}
-
-/** 工具名 → 给模型之外的人看的一句话（任务页的"执行过程"要能读懂）。 */
-function describe(name: string, args: unknown): string {
-  const a = (args || {}) as Record<string, unknown>;
-  const p = typeof a.path === 'string' ? a.path : typeof a.command === 'string' ? a.command : '';
-  return p ? `${name} ${String(p).slice(0, 120)}` : name;
 }
 
 /**
@@ -265,30 +247,6 @@ export async function* streamTsTask(
           default:
             break;
         }
-        continue;
-      }
-
-      if (p.kind === 'approval') {
-        const requestId = String(p.requestId || '');
-        if (requestId) pending.set(sessionId, requestId);
-        const tool = String(p.tool || '工具');
-        yield {
-          type: 'approval',
-          step: stepOf('ts-1', describe(tool, p.args), 'waiting'),
-          action: String(p.action || 'command'),
-          message: `TS 智能体请求执行：${describe(tool, p.args)}`,
-        };
-        continue;
-      }
-
-      if (p.kind === 'approval-timeout') {
-        pending.delete(sessionId);
-        yield {
-          type: 'approval_unattended',
-          step: stepOf('ts-1', '审批超时', 'failed'),
-          action: String(p.action || 'command'),
-          message: '审批无人应答，已按拒绝处理（fail-closed）',
-        };
         continue;
       }
 
