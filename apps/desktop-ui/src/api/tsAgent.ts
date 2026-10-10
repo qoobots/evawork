@@ -164,6 +164,8 @@ export interface TsModelItem {
   provider?: string;
   tier?: string;
   thinking?: string;
+  /** S-25：true＝用户自己添加的通道（id 形如 `custom:<通道 id>`），选中它走它自己的地址与 Key */
+  custom?: boolean;
 }
 export interface TsModelList {
   ok: boolean;

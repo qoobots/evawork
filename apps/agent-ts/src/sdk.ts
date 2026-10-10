@@ -84,6 +84,7 @@ export async function serve(opts: ServeOptions): Promise<void> {
     s: Session,
     prompt: string,
     modelOverride: unknown = "",
+    route: { baseUrl?: string; token?: string } = {},
   ): Promise<void> {
     s.running = true
     s.controller = new AbortController()
@@ -99,6 +100,9 @@ export async function serve(opts: ServeOptions): Promise<void> {
       const wantModel = String(modelOverride || "").trim()
       const cfg = llmConfigFromEnv({
         model: wantModel && wantModel !== "auto" ? wantModel : opts.model,
+        /* S-25：自带通道（BYOK）。地址与 Key 由主进程在**这一轮**注入，子进程不留
+           副本、不落盘——它与 EVA 通道是两条互不影响的凭据来源。 */
+        ...(route.baseUrl ? { baseUrl: route.baseUrl, token: route.token ?? "" } : {}),
       })
 
       const res = await runTurn({
@@ -247,7 +251,10 @@ export async function serve(opts: ServeOptions): Promise<void> {
         if (s.running) return fail(-32002, `会话 ${s.id} 正在执行，先 cancel 或另开会话`)
         // 立即应答，事件通过通知流出——否则长任务会一直占着这条请求不回
         if (isReq) ok(id as Id, { sessionId: s.id, accepted: true })
-        void runPrompt(s, prompt, p.model)
+        void runPrompt(s, prompt, p.model, {
+          baseUrl: p.baseUrl ? String(p.baseUrl) : undefined,
+          token: p.token === undefined || p.token === null ? undefined : String(p.token),
+        })
         return
       }
 

@@ -19,6 +19,7 @@ const fs = require('fs');
 const { ipcMain } = require('electron');
 const { TsAgent, findNode, DEFAULT_MAX_STEPS } = require('./tsAgentCore');
 const iam = require('./iam');
+const providers = require('./providers');
 
 /** TS 智能体源码目录：打包态在 resources/agent-ts，开发期回退到仓库里的 apps/agent-ts。 */
 function agentDir() {
@@ -34,6 +35,41 @@ function sessionsHome() {
   const os = require('os');
   const home = String(process.env.EVA_TS_HOME || '').trim() || path.join(os.homedir(), '.evawork', 'ts-agent');
   return path.join(home, 'sessions');
+}
+
+/** 用户自带的通道（BYOK）→ 模型清单条目：id 用 `custom:<通道 id>`，
+ *  选中它就按这条通道自己的地址与 Key 发请求（见 customRoute）。
+ *  它们排在平台精选**之前**——用户自己加的，是用户最想看见的那几个。 */
+function customModels() {
+  try {
+    return providers
+      .list()
+      .items.filter((p) => p.enabled)
+      .map((p) => ({
+        id: `custom:${p.id}`,
+        name: p.name || p.model || p.base_url,
+        desc: [p.model, p.base_url].filter(Boolean).join(' · ') || '自带通道',
+        abilities: ['text'],
+        custom: true,
+      }));
+  } catch {
+    return []; // 读不到通道就当没有——不该因为一个坏文件让整份清单不可用
+  }
+}
+
+/** `custom:<id>` → 该通道的地址 / Key / 真实模型名。
+ *  通道不在或没配全就**抛成句的错**，而不是把 `custom:xxx` 当模型名发给平台
+ *  （那样只会得到一句莫名其妙的 400，用户查不出是自己这儿没配好）。 */
+function customRoute(model) {
+  const m = String(model || '');
+  if (!m.startsWith('custom:')) return null;
+  const id = m.slice('custom:'.length);
+  const p = providers.get(id);
+  if (!p) throw new Error(`自定义通道不存在：${id}（可能已被移除）`);
+  if (p.enabled === false) throw new Error(`自定义通道「${p.name || id}」已停用`);
+  if (!p.base_url) throw new Error(`自定义通道「${p.name || id}」缺少接口地址`);
+  if (!p.model) throw new Error(`自定义通道「${p.name || id}」还没填模型名`);
+  return { baseUrl: p.base_url, token: p.api_key || '', model: p.model };
 }
 
 /** 读一个会话的日志；坏行跳过（写到一半崩了的行不该让整份历史报废）。
@@ -193,7 +229,11 @@ class TsAgentHost {
       if (!r || !r.ok) throw new Error((r && r.reason) || 'TS 智能体启动失败');
     }
     const sid = await this.ensureSession(sessionId);
-    const r = await this.agent.prompt(sid, prompt, { model });
+    /* S-25：自带通道（`custom:<id>`）用它自己的地址与 Key——凭据由主进程持有
+       （userData/providers.json），只在**这一轮**经协议递给子进程：
+       子进程不自持登录态、不落盘，EVA 令牌也不必为此暴露。 */
+    const route = customRoute(model);
+    const r = await this.agent.prompt(sid, prompt, route ? { ...route } : { model });
     /* SDK 的 session/prompt 应答是 {sessionId, accepted:true}，**没有 ok 字段**；
        而渲染层契约（tsChannel.ts）查的是 r.ok——不在这里补上映射，
        每条消息都会被当成"未接受该请求"。这个断层从 TS-052 起就在：
@@ -242,13 +282,23 @@ class TsAgentHost {
    * Python 后端废弃后，这是模型清单的唯一来源。
    */
   async models({ force } = {}) {
+    const custom = customModels();
     const up = await this.ensureSubprocess();
-    if (!up.ok) return { ok: false, reason: up.reason, models: [] };
+    if (!up.ok) {
+      /* 子进程起不来（典型是未登录 EVA）时，用户**自带**的通道仍要能用——
+         它们本来就是"不登录也能跑"那条路，不该被 EVA 通道的失败一起带走。 */
+      if (custom.length) {
+        return { ok: true, models: custom, source: 'local', reason: `EVA 模型清单不可用：${up.reason}` };
+      }
+      return { ok: false, reason: up.reason, models: [] };
+    }
     try {
       const r = await this.agent.request('models/list', { force: !!force });
-      return { ok: true, ...r };
+      return { ok: true, ...r, models: [...custom, ...(Array.isArray(r.models) ? r.models : [])] };
     } catch (e) {
-      return { ok: false, reason: String((e && e.message) || e), models: [] };
+      const reason = String((e && e.message) || e);
+      if (custom.length) return { ok: true, models: custom, source: 'local', reason: `EVA 模型清单不可用：${reason}` };
+      return { ok: false, reason, models: [] };
     }
   }
 

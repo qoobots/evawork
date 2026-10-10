@@ -217,14 +217,17 @@ class TsAgent extends EventEmitter {
   }
 
   prompt(sessionId, text, opts = {}) {
-    /* model / isolate 一起透传：子进程按**这一轮**的参数跑。
-       此前只传 prompt，界面选的模型被主进程丢掉，模型下拉在 TS 模式下形同虚设。 */
+    /* model / 自带通道一起透传：子进程按**这一轮**的参数跑。
+       此前只传 prompt，界面选的模型被主进程丢掉，模型下拉在 TS 模式下形同虚设。
+       `baseUrl`/`token` 只有自定义通道（BYOK）才有：地址与 Key 由主进程解析后
+       逐轮递进来，子进程不留副本、不落盘。 */
     return this.request(
       'session/prompt',
       {
         sessionId,
         prompt: text,
         ...(opts.model ? { model: String(opts.model) } : {}),
+        ...(opts.baseUrl ? { baseUrl: String(opts.baseUrl), token: String(opts.token || '') } : {}),
       },
       15000,
     );

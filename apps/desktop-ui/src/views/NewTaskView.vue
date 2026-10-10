@@ -38,6 +38,7 @@ import { cancelTsAgentFor, isTsTaskId, replayTsTask, streamTsTask, tsSessionOf, 
 import { tsAgentContextUsage, fetchTsModels } from '@/api/tsAgent';
 import { fetchFileContent, fetchFileRoots, openFilePath, type FilePreview } from '@/api/files';
 import { attachPaths, attachmentPreview, captureScreen, pickFiles, removeAttachment, type Attachment } from '@/api/attachments';
+import { addProvider, testProviderDraft, type ProviderDraft } from '@/api/providers';
 
 /* T-035：产物回写「我的文件」 */
 const { savingId: savingArtifact, artMsg, saveArtifact } = useArtifactSave();
@@ -212,17 +213,18 @@ const modelLabel = computed(() => {
   const hit = remoteModels.value.find((m) => m.id === model.value);
   return hit && hit.name !== hit.id ? hit.name : model.value;
 });
-const modelOptions = computed<{ name: string; label?: string; ratio: string; tag: string; desc?: string; abilities: string[]; thinking?: string; contextWindow?: number }[]>(() => {
+const modelOptions = computed<{ name: string; label?: string; ratio: string; tag: string; desc?: string; abilities: string[]; thinking?: string; contextWindow?: number; custom?: boolean }[]>(() => {
   /* 无兜底：模型通道没返回就不列表项（直接为空），只保留固定首项「自动选择模型」。 */
   const list = remoteModels.value.map((m) => ({
     name: m.id,
     label: m.name !== m.id ? m.name : '',
     ratio: '',
-    tag: TIER_TAGS[m.tier ?? ''] ?? '',
+    tag: TIER_TAGS[m.tier ?? ''] ?? (m.custom ? '自定义' : ''),
     desc: m.desc,
     abilities: m.abilities ?? [],
     thinking: m.thinking,
     contextWindow: m.contextWindow,
+    custom: m.custom === true,
   }));
   return [{ name: 'auto', label: '自动选择模型', ratio: '', tag: '按任务匹配', desc: '按任务类型自动匹配最合适的模型：分析/写作走旗舰，闲聊走快档，超长上下文换长窗口模型', abilities: ['text'], thinking: undefined, contextWindow: undefined }, ...list];
 });
@@ -251,6 +253,7 @@ async function loadTsModels(force = false) {
       abilities: m.abilities || [],
       thinking: m.thinking,
       contextWindow: m.contextWindow,
+      custom: m.custom === true, // S-25：用户自己加的通道
     }));
     if (list.length) {
       remoteModels.value = list;
@@ -263,7 +266,71 @@ async function loadTsModels(force = false) {
     modelsError.value = (e as Error).message || '模型清单获取失败';
   }
 }
-// 后端地址由主进程异步注入（preload 早于地址就绪时调用会拿到空串），
+
+/* S-25：任务页里的「添加模型」（自带 Key / BYOK）。与设置→模型页同一套通道
+   （主进程 userData/providers.json），只是把入口搬到模型下拉里——为了加一个自己的
+   模型（如 DeepSeek）跳到设置里翻半天没必要。录完刷新清单并直接选中它。
+   Key 只存本机、列表只回显后 4 位。 */
+const providerFormOpen = ref(false);
+const pvBusy = ref(false);
+const pvMsg = ref('');
+const pvTone = ref<'ok' | 'warn'>('ok');
+const pvTestMsg = ref('');
+const pvTestOk = ref(false);
+const pvDraft = ref<ProviderDraft>({ name: '', base_url: '', model: '', api_key: '' });
+
+function openProviderForm() {
+  modelOpen.value = false; // 关掉模型下拉，免得两层浮层叠在一起
+  pvMsg.value = '';
+  pvTestMsg.value = '';
+  providerFormOpen.value = true;
+}
+
+async function onTestDraft() {
+  if (pvBusy.value) return;
+  pvBusy.value = true;
+  pvTestMsg.value = '';
+  try {
+    const r = await testProviderDraft(pvDraft.value);
+    pvTestOk.value = r.ok;
+    pvTestMsg.value = r.ok ? r.output || '连通' : r.error || '连接失败';
+  } catch (e) {
+    pvTestOk.value = false;
+    pvTestMsg.value = (e as Error).message;
+  } finally {
+    pvBusy.value = false;
+  }
+}
+
+async function onAddProvider() {
+  if (pvBusy.value) return;
+  if (!pvDraft.value.base_url.trim()) {
+    pvTone.value = 'warn';
+    pvMsg.value = '先填接口地址（OpenAI 兼容，通常以 /v1 结尾）';
+    return;
+  }
+  if (!pvDraft.value.model.trim()) {
+    pvTone.value = 'warn';
+    pvMsg.value = '先填模型名（例如 deepseek-chat）';
+    return;
+  }
+  pvBusy.value = true;
+  pvMsg.value = '';
+  try {
+    const r = await addProvider(pvDraft.value);
+    providerFormOpen.value = false;
+    pvDraft.value = { name: '', base_url: '', model: '', api_key: '' };
+    pvTestMsg.value = '';
+    await loadTsModels(true); // 新通道要立刻出现在下拉里（绕过 6h 缓存）
+    model.value = `custom:${r.item.id}`; // 刚加的，多半就是要用它的
+    notices.value.push(`已添加「${r.item.name}」，模型已切到它`);
+  } catch (e) {
+    pvTone.value = 'warn';
+    pvMsg.value = (e as Error).message;
+  } finally {
+    pvBusy.value = false;
+  }
+}
 // 故挂载时拉一次 + 地址就绪回调里再拉一次，与 DesignSystemView 一致。
 onMounted(loadModels);
 onBackend(loadModels);
@@ -1956,7 +2023,9 @@ async function loginAndRun() {
                   </div>
                 </dl>
               </div>
-              <div class="pop-item" data-coming aria-disabled="true" title="模型管理功能开发中，敬请期待"><UIcon name="gear" :size="13" /> 添加模型</div>
+              <!-- S-25：真的能加——录自己的地址 + Key + 模型名（如 DeepSeek）。
+                   与设置→模型页同一套通道，存完立刻出现在上面这份清单里。 -->
+              <div class="pop-item" @click="openProviderForm"><UIcon name="gear" :size="13" /> 添加模型</div>
             </div>
           </div>
 
@@ -2033,6 +2102,39 @@ async function loginAndRun() {
             <p v-else class="art-tip">{{ artPreview.note || '该文件类型暂不支持预览，可用「在系统中打开」' }}</p>
             <p v-if="artPreview.truncated" class="art-tip">内容过长，已截断预览</p>
           </template>
+        </div>
+      </div>
+    </div>
+
+    <!-- S-25：添加自定义模型（自带 Key / BYOK）。填 OpenAI 兼容地址 + 自己的 Key +
+         模型名（如 deepseek-chat），保存后立刻出现在模型下拉里，选中就走这条通道
+         （**不登录 EVA 也能跑**）。Key 只存本机，不会上传任何地方。 -->
+    <div v-if="providerFormOpen" class="modal-mask" @click.self="providerFormOpen = false">
+      <div class="modal pv-modal" role="dialog" aria-label="添加模型">
+        <button class="icon-btn modal-close" aria-label="关闭" @click="providerFormOpen = false"><UIcon name="x" :size="15" /></button>
+        <div class="modal-title">添加模型</div>
+        <p class="pv-tip">OpenAI 兼容地址 + 你自己的 Key，填完就能在任务里选它。Key 只存在本机。</p>
+        <label class="pv-field">
+          <span class="pv-label">名称</span>
+          <input v-model="pvDraft.name" class="input" placeholder="我的 DeepSeek" />
+        </label>
+        <label class="pv-field">
+          <span class="pv-label">接口地址</span>
+          <input v-model.trim="pvDraft.base_url" class="input" placeholder="https://api.deepseek.com/v1" />
+        </label>
+        <label class="pv-field">
+          <span class="pv-label">模型名</span>
+          <input v-model.trim="pvDraft.model" class="input" placeholder="deepseek-chat" />
+        </label>
+        <label class="pv-field">
+          <span class="pv-label">API Key</span>
+          <input v-model="pvDraft.api_key" class="input" type="password" placeholder="sk-...（本地服务可留空）" />
+        </label>
+        <p v-if="pvTestMsg" class="pv-msg" :class="pvTestOk ? 'ok' : 'warn'">{{ pvTestMsg }}</p>
+        <p v-else-if="pvMsg" class="pv-msg" :class="pvTone">{{ pvMsg }}</p>
+        <div class="pv-actions">
+          <button class="btn" :disabled="pvBusy" @click="onTestDraft">{{ pvBusy ? '测试中…' : '测试连接' }}</button>
+          <button class="btn btn-dark" :disabled="pvBusy" @click="onAddProvider">保存</button>
         </div>
       </div>
     </div>
@@ -2399,6 +2501,17 @@ async function loginAndRun() {
 .ra-save:hover:not(:disabled) { color: var(--violet); border-color: var(--violet); }
 .ra-save:disabled { opacity: 0.5; cursor: default; }
 .ra-msg { margin: 6px 0 0; font-size: 11.5px; color: var(--t3); }
+
+/* S-25：添加模型弹窗（自带 Key / BYOK）。字段竖排——弹窗窄，比设置页那套"左说明右输入"更合身。 */
+.pv-modal { width: min(460px, 92vw); }
+.pv-tip { margin: 8px 0 14px; font-size: 12px; color: var(--t3); line-height: 1.6; }
+.pv-field { display: block; margin-bottom: 12px; }
+.pv-label { display: block; margin-bottom: 5px; font-size: 12px; color: var(--t2); }
+.pv-field .input { width: 100%; box-sizing: border-box; }
+.pv-msg { margin: 2px 0 12px; font-size: 12px; line-height: 1.5; }
+.pv-msg.ok { color: var(--green); }
+.pv-msg.warn { color: var(--err); }
+.pv-actions { display: flex; justify-content: flex-end; gap: 8px; }
 /* T-092：改动与撤销 */
 .run-ck { margin-top: 12px; border-top: 1px solid var(--line-2); padding-top: 10px; }
 .ck-item { display: flex; align-items: center; gap: 6px; font-size: 12.5px; padding: 3px 0; }
