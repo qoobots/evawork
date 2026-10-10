@@ -2057,7 +2057,7 @@ async function loginAndRun() {
             <button class="bar-btn ghost" @click="toggleModel">
               {{ modelLabel }} <UIcon name="chevron-down" :size="11" />
             </button>
-            <div v-if="modelOpen" class="pop-menu right" @click.stop @mouseleave="modelHover = null">
+            <div v-if="modelOpen" class="pop-menu right model-menu" @click.stop @mouseleave="modelHover = null">
               <div class="pop-head2">可用模型</div>
               <div v-if="modelsError" class="pop-tip">{{ modelsError }}</div>
               <div
@@ -2069,7 +2069,7 @@ async function loginAndRun() {
                 @click="model = m.name; modelOpen = false"
               >
                 <UIcon name="sparkle" :size="13" />
-                <span>{{ m.label || m.name }}</span>
+                <span class="mi-name">{{ m.label || m.name }}</span>
                 <span v-if="m.tag" class="tag tag-violet">{{ m.tag }}</span>
                 <span class="ratio">{{ m.ratio }}</span>
                 <!-- S-25：自己加的通道要能就地改 / 删。排在 .ratio 之后——它有 margin-left:auto，
@@ -2383,10 +2383,21 @@ async function loginAndRun() {
 .skill-panel .ps-row:hover { background: var(--line-2); }
 .skill-panel .pp-name { color: var(--violet); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .pop-menu.right { left: auto; right: 0; }
+/* 模型清单这一份要比别的一级菜单宽：一行里要塞下「名字 + 标签 + 改/删按钮」。
+   沿用默认的 230px 时，名字稍长就会把「自定义」挤成竖排三行（行也顶高），
+   或者被迫把名字截成省略号。上限是给超长模型名兜底的——宁可省略号，
+   也别让菜单撑到半个屏幕。 */
+.pop-menu.model-menu { min-width: 300px; max-width: min(380px, 92vw); }
 .pop-item {
   display: flex; align-items: center; gap: 9px; padding: 8px 10px; border-radius: 8px;
   font-size: 13px; cursor: pointer;
 }
+/* 行内标签**绝不能被压变形**：flex 项默认可收缩，空间一紧「自定义」就折成
+   「自/定/义」三行，把整行顶高、和别的行参差不齐。标签定死宽度不收缩，
+   让名字去省略——可读性归名字，标签始终是一块完整的徽标。 */
+.pop-item .tag { flex: none; white-space: nowrap; }
+/* 模型名：占不住的那部分交给省略号，而不是推挤同一行的标签与按钮 */
+.mi-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pop-item:hover { background: var(--line-2); }
 .pop-item svg { color: var(--t2); flex: none; }
 .pop-item b { display: block; font-size: 12.5px; font-weight: 600; }
@@ -2406,7 +2417,10 @@ async function loginAndRun() {
   box-shadow: 0 8px 28px rgba(0,0,0,0.28); padding: 12px 14px; z-index: 30;
 }
 .mc-head { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
-.mc-name { font-size: 13px; font-weight: 700; }
+/* 卡片标题行是同一个毛病：名字一长，徽标就被压成竖排（标签宽度交给名字定，
+   名字再长也不该影响徽标的形状）。名字走省略号，徽标固定不收缩。 */
+.mc-head .tag { flex: none; white-space: nowrap; }
+.mc-name { font-size: 13px; font-weight: 700; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mc-desc { font-size: 11.5px; color: var(--t2); line-height: 1.55; margin: 0 0 8px; }
 .mc-rows { margin: 0; }
 .mc-row { display: flex; gap: 8px; padding: 3px 0; font-size: 11.5px; align-items: baseline; }
@@ -2610,7 +2624,7 @@ async function loginAndRun() {
    常驻两个图标会把行读成工具栏；悬停那一行才浮出来。
    用 visibility 而不是 opacity:0：后者只是"看不见"，那块区域**仍然可点**，
    等于在行尾埋了一颗看不见的删除按钮。 */
-.mi-acts { display: inline-flex; align-items: center; gap: 2px; margin-left: 4px; visibility: hidden; }
+.mi-acts { display: inline-flex; align-items: center; gap: 2px; margin-left: 4px; flex: none; visibility: hidden; }
 .pop-item:hover .mi-acts { visibility: visible; }
 .mi-act {
   display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px;
