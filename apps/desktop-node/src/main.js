@@ -136,7 +136,7 @@ function setupWorkspaceIpc() {
   ipcMain.handle('evawork:workspace-get', () => ({ path: readWorkspace() }));
   ipcMain.handle('evawork:workspace-set', (_e, p) => {
     const v = writeWorkspace(p);
-    /* 工作区是子进程启动参数，运行中改不了：跟档位一样，变了就重拉。
+    /* 工作区是子进程启动参数，运行中改不了：变了就重拉。
        不重拉的话用户刚选完目录，任务还写进旧工作区。 */
     if (tsAgentHost && tsAgentHost.running && tsAgentHost.lastWorkspace !== v) {
       void tsAgentHost.stop().catch(() => {}).then(async () => {

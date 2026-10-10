@@ -169,7 +169,7 @@ class TsAgentHost {
       const info = await agent.waitReady(15000);
       this.agent = agent;
       this.reason = 'ok';
-      this.log.info('[ts-agent] 就绪 | 工作区:', workspace, '| 档位:', policy);
+      this.log.info('[ts-agent] 就绪 | 工作区:', workspace);
       this.push({ kind: 'ready', protocol: info.protocolVersion, workspace });
       return { ok: true, workspace, protocol: info.protocolVersion };
     } catch (e) {
