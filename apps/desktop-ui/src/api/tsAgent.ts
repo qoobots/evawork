@@ -24,6 +24,10 @@ function bridge() {
         sessionRename: (sessionId: string, title: string) => Promise<{ ok: boolean; reason?: string; sessionId?: string; title?: string }>;
         sessionDelete: (sessionId: string) => Promise<{ ok: boolean; reason?: string; sessionId?: string }>;
         sessionSearch: (term: string, sessionId?: string) => Promise<{ ok: boolean; hits?: TsSearchHit[] }>;
+        /** 调试模式（trace）：重拉子进程以套用最新的 EVA_TS_TRACE 环境变量。 */
+        restart: () => Promise<{ ok: boolean; reason?: string }>;
+        /** 打开 trace 目录（系统文件管理器）。 */
+        openTraceDir: () => Promise<{ ok: boolean; reason?: string; path?: string }>;
         on: (cb: (payload: TsAgentPayload) => void) => () => void;
       };
       agentChoice?: {
@@ -38,6 +42,20 @@ function bridge() {
 /** 桥在不在：浏览器直连开发（无 Electron）时为真 false，UI 据此**明示**而不是报错。 */
 export function tsAgentAvailable(): boolean {
   return Boolean(bridge()?.tsAgent);
+}
+
+/** 重拉 TS 智能体子进程（调试模式改了 trace 开关后，让它立刻套用 EVA_TS_TRACE）。 */
+export async function tsAgentRestart(): Promise<{ ok: boolean; reason?: string }> {
+  const b = bridge();
+  if (!b?.tsAgent?.restart) return { ok: false, reason: '当前不是桌面运行环境（缺少主进程桥）' };
+  return await b.tsAgent.restart();
+}
+
+/** 打开 trace 目录（系统文件管理器）；非桌面运行环境会如实告知。 */
+export async function openTraceDir(): Promise<{ ok: boolean; reason?: string; path?: string }> {
+  const b = bridge();
+  if (!b?.tsAgent?.openTraceDir) return { ok: false, reason: '当前不是桌面运行环境（缺少主进程桥）' };
+  return await b.tsAgent.openTraceDir();
 }
 
 /* ---------- 侧栏历史（会话目录） ----------

@@ -16,7 +16,8 @@
  */
 const path = require('path');
 const fs = require('fs');
-const { ipcMain } = require('electron');
+const os = require('os');
+const { ipcMain, shell, app } = require('electron');
 const { TsAgent, findNode, DEFAULT_MAX_STEPS } = require('./tsAgentCore');
 const iam = require('./iam');
 const providers = require('./providers');
@@ -35,6 +36,33 @@ function sessionsHome() {
   const os = require('os');
   const home = String(process.env.EVA_TS_HOME || '').trim() || path.join(os.homedir(), '.evawork', 'ts-agent');
   return path.join(home, 'sessions');
+}
+
+/**
+ * 调试模式（trace）开关：与 UI「上下文与记忆」页的开关是同一份设置。
+ * 落在通用 KV（settings.json）的 `trace` 或 `toggles.trace` 上——UI 深度 watch 自动写回，
+ * 这里只负责**读**：UI 先把新值落盘再重拉子进程，所以读到的总是最新值。
+ */
+function traceEnabledBySetting() {
+  try {
+    const file = path.join(app.getPath('userData'), 'settings.json');
+    const s = JSON.parse(fs.readFileSync(file, 'utf8') || '{}');
+    return !!(s && s.trace) || !!(s && s.toggles && s.toggles.trace);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * trace 目录：必须与 agent-ts `llm.ts` 的 `traceRequest` **逐字一致**，否则打开的是
+ * 另一个目录（用户会以为没留痕）。EVA_TS_TRACE_DIR 优先，否则 homeDir()/trace
+ * （homeDir = EVA_TS_HOME 或 ~/.evawork/ts-agent）。
+ */
+function traceDirForShell() {
+  const dir = (process.env.EVA_TS_TRACE_DIR || '').trim();
+  if (dir) return dir;
+  const home = (process.env.EVA_TS_HOME || '').trim() || path.join(os.homedir(), '.evawork', 'ts-agent');
+  return path.join(home, 'trace');
 }
 
 /** 用户自带的通道（BYOK）→ 模型清单条目：id 用 `custom:<通道 id>`，
@@ -184,6 +212,11 @@ class TsAgentHost {
         ...(Array.isArray(cred.routes) && cred.routes.length
           ? { EVA_AI_ROUTES: cred.routes.join(',') }
           : {}),
+        /* 调试模式（trace）：勾上「调试模式」开关＝给 agent 注入 EVA_TS_TRACE，
+           每次模型调用的完整请求体（system 提示词 + 压缩后的消息 + 工具）落盘到
+           trace 目录，调提示词时复盘用。环境变量只在**启动那一刻**读取，
+           所以开关要生效必须由 UI 侧重拉子进程（restart）——这里只在拉起时读一次。 */
+        ...(traceEnabledBySetting() ? { EVA_TS_TRACE: '1' } : {}),
       },
     });
 
@@ -309,6 +342,16 @@ class TsAgentHost {
     this.agent = null;
     this.reason = '已停止';
     return { ok: true };
+  }
+
+  /**
+   * 重拉子进程：调试（trace）开关改了要立刻生效，而 EVA_TS_TRACE 只在启动时注入，
+   * 只能重拉。会话全部落盘，重启不掉数据；正在跑的请求由调用方自行处理
+   * （设置页极少在任务进行中切开关）。
+   */
+  async restart() {
+    await this.stop();
+    return await this.start();
   }
 
   status() {
@@ -459,6 +502,19 @@ class TsAgentHost {
     ipcMain.handle('evawork:ts-agent-context-usage', (_e, a) => this.contextUsage(a || {}));
     /* 模型清单（模型广场同步）。与 context-usage 同理：按需临时拉起子进程。 */
     ipcMain.handle('evawork:ts-agent-models', (_e, a) => this.models(a || {}));
+    /* 调试模式（trace）：重拉子进程以套用最新的 EVA_TS_TRACE 环境变量。 */
+    ipcMain.handle('evawork:ts-agent-restart', () => this.restart());
+    /* 打开 trace 目录（系统文件管理器）。落点须与 agent-ts llm.ts 的 traceRequest 逐字一致。 */
+    ipcMain.handle('evawork:open-trace-dir', async () => {
+      const dir = traceDirForShell();
+      try {
+        fs.mkdirSync(dir, { recursive: true });
+        const err = await shell.openPath(dir);
+        return err ? { ok: false, reason: err } : { ok: true, path: dir };
+      } catch (e) {
+        return { ok: false, reason: String((e && e.message) || e) };
+      }
+    });
   }
 }
 

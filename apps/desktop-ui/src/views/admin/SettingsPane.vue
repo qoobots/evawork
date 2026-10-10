@@ -8,6 +8,7 @@ import { fetchModels, type ModelItem } from '@/api/catalog';
 import { fetchSettings, putSettings } from '@/api/settings';
 import { fetchFileRoots, setWorkspaceRoot } from '@/api/files';
 import { clearMemory, fetchMemory, saveMemory, type MemoryState } from '@/api/memory';
+import { openTraceDir, tsAgentRestart } from '@/api/tsAgent';
 import { useThemeStore, type ThemeMode } from '@/stores/theme';
 import { useI18nStore } from '@/stores/i18n';
 import { playChime, requestNotifyPermission, type ChimeKind } from '@/composables/useNotify';
@@ -52,6 +53,7 @@ const t = ref({
   notify: true, sound: true, followUp: true,
   innerBrowser: true, outerBrowser: false, autoScreenshot: true,
   computerControl: true, worktreeClean: false, agentsMd: true, claudeMd: false, memory: true,
+  trace: false, // 调试模式（请求留痕）：勾上给 agent 注入 EVA_TS_TRACE
 });
 const volume = ref(50);
 const worktreeGb = ref('5');
@@ -667,6 +669,18 @@ function retryPersist() {
   saveErr.value = '';
   void (failedOp.value === 'load' ? loadSettings() : persist());
 }
+
+/* 调试模式（请求留痕）：勾上＝给 agent 子进程注入 EVA_TS_TRACE，
+   每次模型调用的完整请求体（系统提示词 + 压缩后的消息 + 工具）落盘到
+   ~/.evawork/ts-agent/trace/，调提示词时复盘用。开关要立刻生效必须重拉子进程
+   （环境变量只在启动时注入）；会话都落盘，重启不掉数据。勾上顺手打开那个目录。 */
+async function onTraceToggle(on: boolean) {
+  if (hydrating || !canPersist.value) return;
+  t.value.trace = on; // 让开关立刻反映；深度 watch 之后也会回写，但先于重启要先落盘
+  await putSettings(snapshot()); // 先落盘：下面重拉子进程读到的才是新值
+  await tsAgentRestart().catch(() => {}); // 重拉 agent，EVA_TS_TRACE 环境变量生效
+  if (on) await openTraceDir().catch(() => {}); // 勾上就打开 trace 目录
+}
 </script>
 
 <template>
@@ -1053,6 +1067,22 @@ function retryPersist() {
         </div>
         <div v-else-if="mem?.content" class="mem-view">{{ mem.content }}</div>
         <p v-if="memMsg" class="update-note" :class="memTone">{{ memMsg }}</p>
+      </div>
+      <!-- 调试模式（请求留痕）：调提示词时想看"到底发给模型什么"。
+           落点 ~/.evawork/ts-agent/trace/（EVA_TS_TRACE_DIR 可覆盖），每个模型调用一个
+           req-<step>-<ts>.json。开关会重拉 agent 才生效，勾上顺手打开该目录。 -->
+      <div class="s-sub">{{ i18nStore.t('调试') }}</div>
+      <div class="s-card">
+        <div class="s-row">
+          <div>
+            <div class="s-row-t">{{ i18nStore.t('调试模式（请求留痕）') }}</div>
+            <div class="s-row-d">
+              {{ i18nStore.t('开启后，每次发给模型的完整请求体（系统提示词 + 压缩后的消息 + 工具）会写入本地 trace 目录，便于调提示词时复盘。') }}<br />
+              <span class="muted small">{{ i18nStore.t('默认关闭、不写盘；开启会重拉智能体子进程使其生效，会话不会丢失。') }}</span>
+            </div>
+          </div>
+          <UToggle :model-value="t.trace" @update:model-value="(v: boolean) => onTraceToggle(v)" :title="i18nStore.t('勾上＝开留痕并自动打开 trace 目录')" />
+        </div>
       </div>
     </template>
 

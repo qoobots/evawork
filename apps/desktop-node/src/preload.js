@@ -170,6 +170,10 @@ contextBridge.exposeInMainWorld('evawork', {
     sessionRename: (sessionId, title) => ipcRenderer.invoke('evawork:ts-agent-session-rename', { sessionId, title }),
     sessionDelete: (sessionId) => ipcRenderer.invoke('evawork:ts-agent-session-delete', { sessionId }),
     sessionSearch: (term, sessionId) => ipcRenderer.invoke('evawork:ts-agent-session-search', { term, sessionId }),
+    /** 调试模式（trace）：重拉子进程以套用最新的 EVA_TS_TRACE 环境变量。 */
+    restart: () => ipcRenderer.invoke('evawork:ts-agent-restart'),
+    /** 打开 trace 目录（系统文件管理器）。 */
+    openTraceDir: () => ipcRenderer.invoke('evawork:open-trace-dir'),
     // 返回**取消订阅函数**：组件卸载后回调必须能摘掉，否则事件会继续往死组件里灌
     // （表现为"切换页面后旧会话的事件还在刷"）。
     on: (cb) => {
