@@ -444,6 +444,7 @@ export async function runTurn(o: TurnOptions): Promise<TurnResult> {
       for await (const chunk of stream(o.cfg, messages, {
         tools: openaiSchemas(visible),
         signal: stepSig.signal,
+        step: steps,
       })) {
         if (chunk.type === "text") {
           text += chunk.text

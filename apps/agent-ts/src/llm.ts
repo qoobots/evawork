@@ -10,6 +10,9 @@
 import type { LlmConfig, Message, StreamChunk, ToolCall } from "./types.ts"
 import { egressFetch } from "./egress.ts"
 import { telemetry } from "./telemetry.ts"
+import fs from "node:fs"
+import path from "node:path"
+import { homeDir } from "./session.ts"
 
 /** 流式工具调用在途状态：按 index 累加（见下）。 */
 interface PendingCall {
@@ -135,6 +138,37 @@ function openaiTools(schemas: unknown[] | undefined): unknown[] | undefined {
   return schemas && schemas.length ? schemas : undefined
 }
 
+/* ---- 请求留痕（按需开启，默认关，见下方 gate）-----------------------------
+   调提示词时想看"到底发给模型什么"（system 提示词 + 完整 messages + tools），
+   而会话日志（session.ts）只记模型**返回**的内容与工具调用，不记这份请求体。
+   默认关闭：开启会把完整对话（可能含文件正文 / 私密）写到磁盘，仅调试时打开。
+   开法：`EVA_TS_TRACE=1`。落点：`~/.evawork/ts-agent/trace/`（可用
+   `EVA_TS_TRACE_DIR` 覆盖），每个模型调用一个 `req-<step>-<ts>.json`，
+   按 step 与同轮会话日志里的 `assistant/message.step` 一一对应。 */
+function traceEnabled(): boolean {
+  const v = (process.env.EVA_TS_TRACE || "").trim().toLowerCase()
+  return v === "1" || v === "on" || v === "true"
+}
+
+let traceSeq = 0
+
+/** 把一次模型请求发出的完整 body 落盘（包含 system 提示词与 messages）。失败静默。 */
+function traceRequest(step: number | undefined, model: string, body: unknown): void {
+  if (!traceEnabled()) return
+  try {
+    const dir = process.env.EVA_TS_TRACE_DIR?.trim() || path.join(homeDir(), "trace")
+    fs.mkdirSync(dir, { recursive: true })
+    const name = `req-${step ?? "x"}-${Date.now().toString(36)}-${++traceSeq}.json`
+    fs.writeFileSync(
+      path.join(dir, name),
+      JSON.stringify({ step: step ?? null, model, ...(body as Record<string, unknown>) }, null, 2),
+      "utf8",
+    )
+  } catch {
+    /* 留痕失败绝不影响主流程 */
+  }
+}
+
 /**
  * 把内部消息格式转成 OpenAI 线上格式。
  *
@@ -173,7 +207,7 @@ function toWireMessages(messages: Message[]): unknown[] {
 export async function* streamChat(
   cfg: LlmConfig,
   messages: Message[],
-  opts: { tools?: unknown[]; signal?: AbortSignal; temperature?: number } = {},
+  opts: { tools?: unknown[]; signal?: AbortSignal; temperature?: number; step?: number } = {},
 ): AsyncGenerator<StreamChunk> {
   const models = modelChain(cfg)
   const url = cfg.baseUrl.replace(/\/+$/, "") + "/chat/completions"
@@ -188,6 +222,8 @@ export async function* streamChat(
       temperature: opts.temperature ?? 0.7,
     }
     if (tools) body.tools = tools
+    // 请求留痕：把发出去的完整 body（含 system 提示词）写盘，调提示词时复盘用
+    traceRequest(opts.step, model, body)
 
     const timeouts = llmTimeouts()
     const wd = new RequestWatchdog(opts.signal, timeouts)
