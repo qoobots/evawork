@@ -38,7 +38,7 @@ import { cancelTsAgentFor, isTsTaskId, replayTsTask, streamTsTask, tsSessionOf, 
 import { tsAgentContextUsage, fetchTsModels } from '@/api/tsAgent';
 import { fetchFileContent, fetchFileRoots, openFilePath, type FilePreview } from '@/api/files';
 import { attachPaths, attachmentPreview, captureScreen, pickFiles, removeAttachment, type Attachment } from '@/api/attachments';
-import { addProvider, testProviderDraft, type ProviderDraft } from '@/api/providers';
+import { addProvider, deleteProvider, fetchProviders, testProvider, testProviderDraft, updateProvider, type ProviderDraft } from '@/api/providers';
 
 /* T-035：产物回写「我的文件」 */
 const { savingId: savingArtifact, artMsg, saveArtifact } = useArtifactSave();
@@ -278,12 +278,48 @@ const pvTone = ref<'ok' | 'warn'>('ok');
 const pvTestMsg = ref('');
 const pvTestOk = ref(false);
 const pvDraft = ref<ProviderDraft>({ name: '', base_url: '', model: '', api_key: '' });
+/** 非空＝正在**编辑**这条通道；空＝新增。 */
+const pvEditId = ref('');
+
+/** `custom:<通道 id>` → 通道 id。不是自带通道就返回空串（调用方据此拒绝）。 */
+function providerIdOf(modelId: string): string {
+  return modelId.startsWith('custom:') ? modelId.slice('custom:'.length) : '';
+}
+
+function closeProviderForm() {
+  providerFormOpen.value = false;
+  pvEditId.value = '';
+  pvDraft.value = { name: '', base_url: '', model: '', api_key: '' };
+  pvTestMsg.value = '';
+  pvMsg.value = '';
+}
 
 function openProviderForm() {
+  closeProviderForm(); // 先清干净，免得带着上一条（或上次编辑）的残留字段
   modelOpen.value = false; // 关掉模型下拉，免得两层浮层叠在一起
-  pvMsg.value = '';
-  pvTestMsg.value = '';
   providerFormOpen.value = true;
+}
+
+/** 编辑已有通道。模型清单里只有名字和摘要（`model · base_url`），没有完整字段，
+ *  所以先把整条记录取回来再填表；Key 不回显（渲染层拿不到原文），留空即"不改动"。 */
+async function openProviderEdit(m: { name: string; label?: string }) {
+  const id = providerIdOf(m.name);
+  if (!id) return;
+  try {
+    const p = ((await fetchProviders()).items || []).find((x) => x.id === id);
+    if (!p) {
+      notices.value.push('这条通道已经不在了（可能刚被删掉）');
+      await loadTsModels(true);
+      return;
+    }
+    closeProviderForm();
+    pvEditId.value = id;
+    pvDraft.value = { name: p.name, base_url: p.base_url, model: p.model, api_key: '' };
+    modelOpen.value = false;
+    providerFormOpen.value = true;
+  } catch (e) {
+    notices.value.push((e as Error).message);
+  }
 }
 
 async function onTestDraft() {
@@ -291,7 +327,12 @@ async function onTestDraft() {
   pvBusy.value = true;
   pvTestMsg.value = '';
   try {
-    const r = await testProviderDraft(pvDraft.value);
+    /* 编辑时若没重填 Key，就拿**已存的那把**测（渲染层手里没有 Key 原文，
+       用空 Key 去测只会得到一句把人带偏的 401）。 */
+    const r =
+      pvEditId.value && !pvDraft.value.api_key
+        ? await testProvider(pvEditId.value)
+        : await testProviderDraft({ ...pvDraft.value });
     pvTestOk.value = r.ok;
     pvTestMsg.value = r.ok ? r.output || '连通' : r.error || '连接失败';
   } catch (e) {
@@ -302,7 +343,7 @@ async function onTestDraft() {
   }
 }
 
-async function onAddProvider() {
+async function onSaveProvider() {
   if (pvBusy.value) return;
   if (!pvDraft.value.base_url.trim()) {
     pvTone.value = 'warn';
@@ -316,11 +357,22 @@ async function onAddProvider() {
   }
   pvBusy.value = true;
   pvMsg.value = '';
+  const id = pvEditId.value;
   try {
-    const r = await addProvider(pvDraft.value);
-    providerFormOpen.value = false;
-    pvDraft.value = { name: '', base_url: '', model: '', api_key: '' };
-    pvTestMsg.value = '';
+    if (id) {
+      await updateProvider(id, {
+        name: pvDraft.value.name,
+        base_url: pvDraft.value.base_url,
+        model: pvDraft.value.model,
+        api_key: pvDraft.value.api_key, // 空串＝保留原 Key（providers.update 的约定）
+      });
+      closeProviderForm();
+      await loadTsModels(true);
+      notices.value.push('已保存修改');
+      return;
+    }
+    const r = await addProvider({ ...pvDraft.value });
+    closeProviderForm();
     await loadTsModels(true); // 新通道要立刻出现在下拉里（绕过 6h 缓存）
     model.value = `custom:${r.item.id}`; // 刚加的，多半就是要用它的
     notices.value.push(`已添加「${r.item.name}」，模型已切到它`);
@@ -331,6 +383,26 @@ async function onAddProvider() {
     pvBusy.value = false;
   }
 }
+
+async function onProviderRemove(m: { name: string; label?: string }) {
+  const id = providerIdOf(m.name);
+  if (!id) return;
+  const label = m.label || m.name;
+  if (!window.confirm(`移除通道「${label}」？已保存的 Key 会一并删掉。`)) return;
+  try {
+    await deleteProvider(id);
+    /* 选中的正是这条就先退回「自动」：不然会停在一个已经不存在、
+       再发出去必然报错的模型 id 上（loadTsModels 也会兜这一下，但那要靠清单拉得到）。 */
+    if (model.value === m.name) model.value = 'auto';
+    await loadTsModels(true);
+    closeProviderForm(); // 从弹窗里删的时候顺手把弹窗收掉（没开就是空操作）
+    notices.value.push(`已移除「${label}」`);
+  } catch (e) {
+    notices.value.push((e as Error).message);
+  }
+}
+
+// 后端地址由主进程异步注入（preload 早于地址就绪时调用会拿到空串），
 // 故挂载时拉一次 + 地址就绪回调里再拉一次，与 DesignSystemView 一致。
 onMounted(loadModels);
 onBackend(loadModels);
@@ -2000,6 +2072,12 @@ async function loginAndRun() {
                 <span>{{ m.label || m.name }}</span>
                 <span v-if="m.tag" class="tag tag-violet">{{ m.tag }}</span>
                 <span class="ratio">{{ m.ratio }}</span>
+                <!-- S-25：自己加的通道要能就地改 / 删。排在 .ratio 之后——它有 margin-left:auto，
+                     会被一起推到最右；`.stop` 是必须的，否则点按钮会顺带把模型选中、菜单也关了。 -->
+                <span v-if="m.custom" class="mi-acts">
+                  <button class="mi-act" :title="`编辑「${m.label || m.name}」`" @click.stop="openProviderEdit(m)"><UIcon name="pen" :size="12" /></button>
+                  <button class="mi-act danger" :title="`移除「${m.label || m.name}」`" @click.stop="onProviderRemove(m)"><UIcon name="trash" :size="12" /></button>
+                </span>
               </div>
               <!-- 悬停模型的详情卡片：fixed + 行矩形定位、跟随悬停行（参考竞品的模型详情面板） -->
               <div v-if="modelHover" class="model-card" :style="modelCardStyle" @click.stop>
@@ -2109,10 +2187,10 @@ async function loginAndRun() {
     <!-- S-25：添加自定义模型（自带 Key / BYOK）。填 OpenAI 兼容地址 + 自己的 Key +
          模型名（如 deepseek-chat），保存后立刻出现在模型下拉里，选中就走这条通道
          （**不登录 EVA 也能跑**）。Key 只存本机，不会上传任何地方。 -->
-    <div v-if="providerFormOpen" class="modal-mask" @click.self="providerFormOpen = false">
-      <div class="modal pv-modal" role="dialog" aria-label="添加模型">
-        <button class="icon-btn modal-close" aria-label="关闭" @click="providerFormOpen = false"><UIcon name="x" :size="15" /></button>
-        <div class="modal-title">添加模型</div>
+    <div v-if="providerFormOpen" class="modal-mask" @click.self="closeProviderForm">
+      <div class="modal pv-modal" role="dialog" :aria-label="pvEditId ? '编辑模型' : '添加模型'">
+        <button class="icon-btn modal-close" aria-label="关闭" @click="closeProviderForm"><UIcon name="x" :size="15" /></button>
+        <div class="modal-title">{{ pvEditId ? '编辑模型' : '添加模型' }}</div>
         <p class="pv-tip">OpenAI 兼容地址 + 你自己的 Key，填完就能在任务里选它。Key 只存在本机。</p>
         <label class="pv-field">
           <span class="pv-label">名称</span>
@@ -2128,13 +2206,26 @@ async function loginAndRun() {
         </label>
         <label class="pv-field">
           <span class="pv-label">API Key</span>
-          <input v-model="pvDraft.api_key" class="input" type="password" placeholder="sk-...（本地服务可留空）" />
+          <input
+            v-model="pvDraft.api_key"
+            class="input"
+            type="password"
+            :placeholder="pvEditId ? '留空则不修改已存的 Key' : 'sk-...（本地服务可留空）'"
+          />
         </label>
         <p v-if="pvTestMsg" class="pv-msg" :class="pvTestOk ? 'ok' : 'warn'">{{ pvTestMsg }}</p>
         <p v-else-if="pvMsg" class="pv-msg" :class="pvTone">{{ pvMsg }}</p>
         <div class="pv-actions">
+          <button
+            v-if="pvEditId"
+            class="btn pv-danger"
+            :disabled="pvBusy"
+            @click="onProviderRemove({ name: `custom:${pvEditId}`, label: pvDraft.name || '这条通道' })"
+          >
+            移除
+          </button>
           <button class="btn" :disabled="pvBusy" @click="onTestDraft">{{ pvBusy ? '测试中…' : '测试连接' }}</button>
-          <button class="btn btn-dark" :disabled="pvBusy" @click="onAddProvider">保存</button>
+          <button class="btn btn-dark" :disabled="pvBusy" @click="onSaveProvider">{{ pvEditId ? '保存修改' : '保存' }}</button>
         </div>
       </div>
     </div>
@@ -2512,6 +2603,24 @@ async function loginAndRun() {
 .pv-msg.ok { color: var(--green); }
 .pv-msg.warn { color: var(--err); }
 .pv-actions { display: flex; justify-content: flex-end; gap: 8px; }
+/* 编辑态左边的「移除」：把右边的测试/保存推到另一头，免得误点 */
+.pv-danger { margin-right: auto; color: var(--red); }
+
+/* S-25：模型下拉里自带通道的「编辑 / 移除」小按钮。默认不显示——清单是拿来选模型的，
+   常驻两个图标会把行读成工具栏；悬停那一行才浮出来。
+   用 visibility 而不是 opacity:0：后者只是"看不见"，那块区域**仍然可点**，
+   等于在行尾埋了一颗看不见的删除按钮。 */
+.mi-acts { display: inline-flex; align-items: center; gap: 2px; margin-left: 4px; visibility: hidden; }
+.pop-item:hover .mi-acts { visibility: visible; }
+.mi-act {
+  display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px;
+  padding: 0; border: none; border-radius: 6px; background: transparent; color: var(--t2); cursor: pointer;
+}
+/* 图标用的是 stroke="currentColor"，而 `.pop-item svg` 单独指定了颜色，
+   所以要连 svg 一起覆盖，否则悬停时只有按钮底色变、图标纹丝不动。 */
+.mi-act:hover { background: var(--line); }
+.mi-act:hover svg { color: var(--t1); }
+.mi-act.danger:hover svg { color: var(--red); }
 /* T-092：改动与撤销 */
 .run-ck { margin-top: 12px; border-top: 1px solid var(--line-2); padding-top: 10px; }
 .ck-item { display: flex; align-items: center; gap: 6px; font-size: 12.5px; padding: 3px 0; }
