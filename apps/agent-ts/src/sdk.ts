@@ -266,10 +266,15 @@ export async function serve(opts: ServeOptions): Promise<void> {
       }
 
       /* ---- 上下文用量（TS-065）：界面在**没在跑**时也要能看（回放旧会话、刚打开任务页）。
-         不需要凭据、不要求会话在跑——它是从落盘日志重投影算出来的，与请求同源。 */
+         不需要凭据、不要求会话在跑——它是从落盘日志重投影算出来的，与请求同源。
+
+         **空 sessionId 不是错误**："新建任务"页就是还没有会话，可此刻已经有一份真实占用
+         ——系统提示词加工具/MCP 的 schema 马上就要发出去，算出来的正是这次请求的基线。
+         早先这里直接回 `缺少 sessionId`，界面就没有 id 可传，于是**永远画不出那个圆环**，
+         看起来像"用量图标时有时无"。没有历史的会话与不存在的会话本就走同一条路
+         （`SessionLog` 只读、不建文件），所以不必另写一套。 */
       case "context/usage": {
         const sid = String(p.sessionId || "")
-        if (!sid) return fail(-32602, "缺少 sessionId")
         return isReq ? ok(id as Id, usageForSession(sid)) : undefined
       }
 

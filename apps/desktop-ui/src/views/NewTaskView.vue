@@ -1137,6 +1137,9 @@ function resetToNew() {
   skillName.value = '';
   runTitle.value = '';
   errMsg.value = '';
+  /* 新任务页也要有那个圆环：拉一次基线用量（系统提示词 + 工具/MCP，对话为 0）。
+     resetRun() 刚把 usage 清空，不补这一次圆环就会消失到用户下次发消息为止。 */
+  void refreshUsage();
   nextTick(() => inputRef.value?.focus());
 }
 
@@ -1564,8 +1567,10 @@ function partColor(id: string): string {
 /** 拉一次用量（跑完 / 回放完对账用）：流里的 usage 帧是过程值，终局按落盘日志重算一次，
  *  保证"跑完看到的数字"与"下次打开这个会话看到的数字"是同一个。 */
 async function refreshUsage(): Promise<void> {
+  /* 没有会话 id 也照查：**新建任务页**就是这种情况，拿回来的是"系统提示词 + 工具/MCP"的基线
+     （对话消息为 0）。圆环因此在任何页面都在，而不是"跑过一次之后才冒出来"——那正是
+     用户眼里的"图标没有了"。agent-ts 侧对空 id 按基线算（见 sdk.ts 的 context/usage）。 */
   const sid = taskId.value && isTsTaskId(taskId.value) ? tsSessionOf(taskId.value) : '';
-  if (!sid) return;
   try {
     const r = await tsAgentContextUsage(sid);
     if (r.ok && r.usage) usage.value = r.usage;

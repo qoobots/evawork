@@ -265,7 +265,8 @@ class TsAgentHost {
    */
   async contextUsage({ sessionId }) {
     const sid = String(sessionId || '').trim();
-    if (!sid) return { ok: false, reason: '缺少 sessionId' };
+    /* 空 sessionId 照查：新建任务页还没有会话，但"系统提示词 + 工具/MCP"的占用是实打实的，
+       算出来就是这次请求的基线。拦在这里等于让界面永远拿不到数据、画不出那个圆环。 */
     const up = await this.ensureSubprocess();
     if (!up.ok) return { ok: false, reason: up.reason };
     try {
