@@ -1004,6 +1004,10 @@ onUnmounted(() => {
 });
 
 const busy = computed(() => phase.value === 'creating' || phase.value === 'streaming');
+/** 正在回放落盘事件日志（打开历史任务）。**它不是在执行**——以前这里没区分：
+ *  徽章写着"流式执行中"、过程区把上百步又走一遍、发送键还变成停止键，
+ *  看起来就像"一打开历史任务就开始自动执行"（实测就是这么被报上来的）。 */
+const replaying = ref(false);
 function phaseLabelOf(p: string): string {
   return (
     {
@@ -1018,7 +1022,8 @@ function phaseLabelOf(p: string): string {
     } as Record<string, string>
   )[p] ?? p;
 }
-const phaseLabel = computed(() => phaseLabelOf(phase.value));
+/* 回放期间徽章说实话：读历史 ≠ 在跑。 */
+const phaseLabel = computed(() => (replaying.value ? '读取历史中' : phaseLabelOf(phase.value)));
 
 function resetRun() {
   phase.value = 'idle';
@@ -1194,6 +1199,7 @@ function syncRouteView() {
 async function openTsSession(id: string) {
   taskId.value = id;
   phase.value = 'streaming';
+  replaying.value = true;
   const rebuilt: Turn[] = [];
   try {
     for await (const ev of replayTsTask(tsSessionOf(id))) {
@@ -1219,6 +1225,8 @@ async function openTsSession(id: string) {
     errMsg.value = (e as Error).message || '回放失败';
     if (!curUser.value) curUser.value = 'TS 会话';
     return;
+  } finally {
+    replaying.value = false;
   }
   const last = rebuilt.pop();
   history.value = rebuilt;
@@ -1916,8 +1924,12 @@ async function loginAndRun() {
           <!-- partial：跑完了但有失败——不说清，用户会对着全绿状态怀疑答案为什么不符 -->
           <p v-if="phase === 'partial'" class="run-note">本轮有工具调用未成功（见执行过程中标红的步骤），结果可能不完整——可追问重试失败的部分。</p>
 
-          <!-- 加载态：尚未拿到步骤 -->
-          <div v-if="busy && !steps.length && !output && !streamBuf" class="run-hint">
+          <!-- 加载态：尚未拿到步骤。回放历史说的是"读日志"，不是"在规划"——
+               打开历史任务 ≠ 在执行，文案含糊就会看着像自动重跑。 -->
+          <div v-if="replaying && !steps.length && !output && !streamBuf" class="run-hint">
+            <span class="spin" /> 正在读取历史记录…
+          </div>
+          <div v-else-if="busy && !steps.length && !output && !streamBuf" class="run-hint">
             <span class="spin" /> 正在规划执行步骤…
           </div>
 
@@ -2427,13 +2439,13 @@ async function loginAndRun() {
           </button>
           <!-- 执行中发送键变停止键（EvaWork 同款交互）：停是协作式的，已产出内容不丢 -->
           <button
-            v-if="busy" class="send-btn stop" aria-label="停止"
+            v-if="busy && !replaying" class="send-btn stop" aria-label="停止"
             :disabled="stopping" :title="stopping ? '已请求停止，正在等待后端在安全边界停下' : '停止本次执行'"
             @click="stop"
           ><UIcon name="square" :size="13" /></button>
           <button
             v-else class="send-btn" aria-label="发送"
-            :disabled="(!prompt.trim() && !attachments.length) || loginRequired"
+            :disabled="(!prompt.trim() && !attachments.length) || loginRequired || replaying"
             :title="loginRequired ? '请先登录 EVA 账号' : ''"
             @click="submit"
           ><UIcon name="send" :size="14" /></button>
