@@ -1064,7 +1064,7 @@ function retryPersist() {
           <div>
             <div class="s-row-t">{{ i18nStore.t('智能体内核') }}</div>
             <div class="s-row-d">
-              {{ i18nStore.t('只剩一套智能体内核：TS 智能体（零依赖 Node 运行时，工具 / 沙箱档位 / 审批走同一份契约') }}
+              {{ i18nStore.t('只剩一套智能体内核：TS 智能体（零依赖 Node 运行时，工具 / 沙箱档位走同一份契约') }}
               <span class="muted">（shared/agent-contract.json）</span>{{ i18nStore.t('。Python 后端已废弃，不再拉起。') }}
             </div>
           </div>

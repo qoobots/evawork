@@ -352,7 +352,7 @@ export const STATE_LABEL: Record<string, string> = {
 export const STEP_LABEL: Record<StepStatus, string> = {
   pending: '待执行',
   running: '进行中',
-  waiting: '待审批',
+  waiting: '等待中',
   done: '已完成',
   failed: '失败',
   skipped: '已跳过',

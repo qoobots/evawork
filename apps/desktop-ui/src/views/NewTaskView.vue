@@ -267,7 +267,7 @@ async function loadTsModels(force = false) {
 // 故挂载时拉一次 + 地址就绪回调里再拉一次，与 DesignSystemView 一致。
 onMounted(loadModels);
 onBackend(loadModels);
-onMounted(loadPrefs); // S-08/S-12：审批默认档与结束提醒
+onMounted(loadPrefs); // S-08/S-12：结束提醒
 onBackend(loadPrefs);
 // 登录态转成"已登录"后必须重新拉一次清单：上面两个时机都只在启动阶段跑，
 // 若那一刻还没登录，下拉会永久停在「内置模型 + 未登录提示」，用户登录成功了它也不自愈。
@@ -1103,7 +1103,7 @@ async function runFollowUp(title: string, skill = '') {
     for await (const ev of streamTask(taskId.value, false, lastRev.value)) {
       applyEvent(ev);
     }
-    // T-073/T-095：中断与审批挂起都是终态，不能被这里覆盖成"已完成"
+    // T-073/T-095：中断是终态，不能被这里覆盖成"已完成"
     if (!['error', 'cancelled', 'partial'].includes(phase.value)) phase.value = 'done';
     announceResult(); // S-12
     void loadFollowups(true); // S-24：跑完才要建议（没跑完的答复随时会变）
@@ -1164,8 +1164,8 @@ async function runOnce(title: string, resume: boolean, skill = '') {
       applyEvent(ev);
     }
     // TS 无法感知 applyEvent 对 phase 的副作用，需显式放宽类型再判断
-    // T-073：中断是终态；T-095：审批挂起也是——后端停在 waiting 结束了流，
-    // 不能被这里覆盖成"已完成"（界面显示已完成、实际在等人审批，自相矛盾）
+    // T-073：中断是终态——后端已结束流，
+    // 不能被这里覆盖成"已完成"（界面显示已完成、实际已中断，自相矛盾）
     if (!['error', 'cancelled', 'partial'].includes(phase.value)) phase.value = 'done';
     announceResult(); // S-12
     void loadFollowups(true); // S-24
@@ -1313,7 +1313,7 @@ function applyEvent(ev: StreamEvent) {
       break;
     }
     case 'tool_result': {
-      // T-108：结果早于调用到达（审批后续跑）时会补一条，补的那条也得进时间线
+      // T-108：结果早于调用到达（续跑）时会补一条，补的那条也得进时间线
       const added = patchToolResult(ev.result);
       if (added) timeline.value.push({ kind: 'tool', run: added });
       break;
@@ -1334,7 +1334,7 @@ function applyEvent(ev: StreamEvent) {
       // 「分析报告1005.md」、执行过程显示 7 步）。本轮的步骤/产物由本轮的
       // plan/step/replan/artifact 帧喂齐，done 帧只取状态。
       runState.value = ev.task.state;
-      // T-106：答案已经交付，过程折回折叠态让位给正文。出错/中断/等审批时**不折**——
+      // T-106：答案已经交付，过程折回折叠态让位给正文。出错/中断时**不折**——
       // 那些情况下过程就是排查线索，藏起来只会让人干瞪眼。
       processOpen.value = false;
       break;
@@ -1617,7 +1617,7 @@ async function loginAndRun() {
               </div>
             </template>
 
-            <!-- T-071：系统提示（重试/降级/审批等）——不是模型的过程，统一附在时间线之后 -->
+            <!-- T-071：系统提示（重试/降级等）——不是模型的过程，统一附在时间线之后 -->
             <p v-for="(n, i) in notices" :key="'n' + i" class="run-note">{{ n }}</p>
           </div>
 

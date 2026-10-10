@@ -10,7 +10,7 @@
 //      一律不调（各自独立存储，不能假装两边是同一份数据）。
 //      **例外**：撤销回滚点两边都有——TS 侧用自己的影子仓库（TS-060），
 //      撤销走主进程而不是后端接口，但界面上那张卡是同一张。
-//   2. **TS 智能体不再有审批概念**（见 agent-ts 精简）：审批 UI 已整体移除，
+//   2. **TS 智能体不再有人工确认环节**（见 agent-ts 精简）：对应 UI 已整体移除，
 //      历史任务回显仍走这套 StreamEvent，只是不再产生 `approval` / `approval_unattended` 帧。
 
 import type { ContextUsage, StreamEvent, Step, SubagentTrace, Task } from './tasks';
@@ -22,7 +22,7 @@ import type { TsAgentPayload } from './backend';
  * 所以任务页里的任务 id 直接用会话 id，**不再叠一层**。
  *
  * 以前这里又加一个 `ts-`，本地条目就成了 `ts-ts-…`，与 `fetchTaskList` 返回的原始会话 id
- * 对不上：同一条会话在侧栏以两条出现，且 `tsSessionOf` 多剥一层导致回放/回滚点/审批
+ * 对不上：同一条会话在侧栏以两条出现，且 `tsSessionOf` 多剥一层导致回放/回滚点
  * 全指向一个不存在的会话。
  */
 const TS_PREFIX = 'ts-';
@@ -47,7 +47,7 @@ export function tsSessionOf(taskId: string): string {
  * 子进程没死但卡住、或终态帧没能送达渲染层时，原来那个 `await` 会**永久挂住**，
  * 界面就一直转圈，而任务其实早就不动了。
  *
- * 取值要容得下合法的长静默：命令工具最长 120s，模型流静默上限 60s，审批等待另算，
+ * 取值要容得下合法的长静默：命令工具最长 120s，模型流静默上限 60s，
  * 所以给 5 分钟——宁可晚一点报，也不能把正常任务误杀。
  */
 const CHANNEL_IDLE_MS = 300_000;
@@ -90,7 +90,7 @@ function stepOf(id: string, title: string, status: Step['status']): Step {
  * `onSession` 在拿到真实会话 id 时回调一次——任务页靠它把"这一轮"绑到会话上
  * （追问要发回同一个会话，否则每问一次就换一个上下文）。
  *
- * 注意：**工作区与审批档位是主进程拉起 TS 智能体时定好的**，不随每一轮改
+ * 注意：**工作区与沙箱档位是主进程拉起 TS 智能体时定好的**，不随每一轮改
  * （改了就得重启子进程，代价远大于收益）。因此 `workspace` / `policy` 在这里
  * 只是"带过去给人看"，真正生效的是启动时的那一份。
  */
