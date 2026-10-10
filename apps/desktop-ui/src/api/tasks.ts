@@ -268,7 +268,6 @@ function sessionStopToState(stop: string): string {
   if (!s) return 'running'; // 没有 turn/end = 还没跑完一轮
   if (s.includes('error') || s.includes('fail')) return 'failed';
   if (s.includes('cancel') || s.includes('abort')) return 'cancelled';
-  if (s.includes('approval') || s.includes('wait')) return 'waiting_approval';
   if (s.includes('limit') || s.includes('maxstep')) return 'pending';
   return 'done';
 }
@@ -345,7 +344,6 @@ export const STATE_LABEL: Record<string, string> = {
   pending: '排队中',
   planning: '规划中',
   running: '执行中',
-  waiting_approval: '待审批',
   done: '已完成',
   failed: '失败',
   cancelled: '已取消',

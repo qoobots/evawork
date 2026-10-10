@@ -6,7 +6,6 @@ import {
   createTask,
   cancelTask,
   streamTask,
-  STATE_LABEL,
   STEP_LABEL,
   type Artifact,
   type Step,
@@ -32,7 +31,7 @@ const online = computed(() => bridgeAvailable());
 
 /* ---------- 应用模板：创建任务并流式执行（T-032） ---------- */
 /* T-073：'cancelled' 独立终态——得让用户知道是自己停的，不是跑完了 */
-type Phase = 'idle' | 'creating' | 'streaming' | 'waiting' | 'error' | 'done' | 'cancelled';
+type Phase = 'idle' | 'creating' | 'streaming' | 'error' | 'done' | 'cancelled';
 const phase = ref<Phase>('idle');
 const steps = ref<Step[]>([]);
 const output = ref('');
@@ -60,7 +59,6 @@ const phaseLabel = computed(
       idle: '未开始',
       creating: '创建任务中',
       streaming: '流式执行中',
-      waiting: STATE_LABEL.waiting_approval,
       error: '出错',
       done: '已完成',
       cancelled: '已中断',

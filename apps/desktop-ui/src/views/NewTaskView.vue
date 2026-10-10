@@ -22,7 +22,6 @@ import {
   fetchFollowup,
   fetchTask,
   fetchTaskEvents,
-  STATE_LABEL,
   STEP_LABEL,
   streamTask,
   type Artifact,
@@ -145,16 +144,14 @@ async function loadPrefs() {
 
 /** 一轮跑完的提醒：横幅（需授权）+ 提示音（音量取设置滑条）。 */
 function announceResult() {
-  if (!['done', 'partial', 'error', 'waiting'].includes(phase.value)) return;
-  const kind: ChimeKind = phase.value === 'error' ? 'error' : phase.value === 'waiting' ? 'waiting' : 'done';
+  if (!['done', 'partial', 'error'].includes(phase.value)) return;
+  const kind: ChimeKind = phase.value === 'error' ? 'error' : 'done';
   const label =
     phase.value === 'partial'
       ? '任务完成（部分调用失败）'
       : phase.value === 'done'
         ? '任务已完成'
-        : phase.value === 'waiting'
-          ? '任务等待你操作'
-          : '任务执行失败';
+        : '任务执行失败';
   if (prefs.value.sound) playChime(kind, prefs.value.volume / 100);
   if (prefs.value.notify) notifyTask('EvaWork', `${label}：${runTitle.value.slice(0, 60)}`);
 }
@@ -289,7 +286,7 @@ watch(useTs, (now, before) => {
 /* T-073：'cancelled' 是独立终态——与 done/failed 区分开，用户得知道是自己停的。
    'partial'：跑完了，但本轮有工具调用没做成（TS 侧 failed>0）——
    不能和全绿"已完成"混为一谈，否则"三个命令全失败却显示已完成"。 */
-type Phase = 'idle' | 'creating' | 'streaming' | 'waiting' | 'error' | 'done' | 'cancelled' | 'partial';
+type Phase = 'idle' | 'creating' | 'streaming' | 'error' | 'done' | 'cancelled' | 'partial';
 
 const phase = ref<Phase>('idle');
 const runState = ref('');
@@ -751,7 +748,6 @@ function phaseLabelOf(p: string): string {
       idle: '未开始',
       creating: '创建任务中',
       streaming: '流式执行中',
-      waiting: STATE_LABEL.waiting_approval,
       error: '出错',
       done: '已完成',
       partial: '完成（有失败）',
@@ -861,13 +857,11 @@ async function openTask(id: string) {
     const segs = splitEventTurns(items);
     const headCount = Math.max(0, msgTurns.length - segs.length); // 没有事件可重建的前几轮
     const settlePhase =
-      t.state === 'waiting_approval'
-        ? 'waiting'
-        : t.state === 'failed' || t.state === 'error' // T-138：error = 崩在这一趟的某一环，同样是失败
-          ? 'error'
-          : t.state === 'cancelled'
-            ? 'cancelled'
-            : 'done';
+      t.state === 'failed' || t.state === 'error' // T-138：error = 崩在这一趟的某一环，同样是失败
+        ? 'error'
+        : t.state === 'cancelled'
+          ? 'cancelled'
+          : 'done';
     const rebuilt: Turn[] = [];
     segs.forEach((seg, i) => {
       curUser.value = msgTurns[headCount + i]?.user || t.title;
@@ -891,13 +885,11 @@ async function openTask(id: string) {
       errMsg.value = '';
     } else {
       phase.value =
-        t.state === 'waiting_approval'
-          ? 'waiting'
-          : t.state === 'failed' || t.state === 'error' // T-138
-            ? 'error'
-            : t.state === 'cancelled'
-              ? 'cancelled'
-              : 'done';
+        t.state === 'failed' || t.state === 'error' // T-138
+          ? 'error'
+          : t.state === 'cancelled'
+            ? 'cancelled'
+            : 'done';
       // 终态只要不是失败，就不要保留历史回放里的"达到轮次上限"提示
       if (!['failed', 'error'].includes(t.state)) {
         hitLimit.value = false;
@@ -966,7 +958,7 @@ async function openTsSession(id: string) {
     timeline.value = last.timeline;
     steps.value = last.steps;
     artifacts.value = last.artifacts;
-    phase.value = (['done', 'partial', 'error', 'cancelled', 'waiting'].includes(last.phase) ? last.phase : 'done') as Phase;
+    phase.value = (['done', 'partial', 'error', 'cancelled'].includes(last.phase) ? last.phase : 'done') as Phase;
     processOpen.value = false;
   } else {
     phase.value = 'done';
@@ -1112,7 +1104,7 @@ async function runFollowUp(title: string, skill = '') {
       applyEvent(ev);
     }
     // T-073/T-095：中断与审批挂起都是终态，不能被这里覆盖成"已完成"
-    if (!['error', 'cancelled', 'waiting', 'partial'].includes(phase.value)) phase.value = 'done';
+    if (!['error', 'cancelled', 'partial'].includes(phase.value)) phase.value = 'done';
     announceResult(); // S-12
     void loadFollowups(true); // S-24：跑完才要建议（没跑完的答复随时会变）
   } catch (e) {
@@ -1174,7 +1166,7 @@ async function runOnce(title: string, resume: boolean, skill = '') {
     // TS 无法感知 applyEvent 对 phase 的副作用，需显式放宽类型再判断
     // T-073：中断是终态；T-095：审批挂起也是——后端停在 waiting 结束了流，
     // 不能被这里覆盖成"已完成"（界面显示已完成、实际在等人审批，自相矛盾）
-    if (!['error', 'cancelled', 'waiting', 'partial'].includes(phase.value)) phase.value = 'done';
+    if (!['error', 'cancelled', 'partial'].includes(phase.value)) phase.value = 'done';
     announceResult(); // S-12
     void loadFollowups(true); // S-24
   } catch (e) {
@@ -1220,7 +1212,7 @@ async function runTs(text: string, sessionId = '') {
     )) {
       applyEvent(ev);
     }
-    if (!['error', 'cancelled', 'waiting', 'partial'].includes(phase.value)) phase.value = 'done';
+    if (!['error', 'cancelled', 'partial'].includes(phase.value)) phase.value = 'done';
     /* TS-065：终局按落盘日志对一次账——流里的 usage 帧是过程值，收尾重算，免得面板停在半路的数字 */
     void refreshUsage();
     announceResult();
