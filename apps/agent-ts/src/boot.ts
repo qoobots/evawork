@@ -14,6 +14,7 @@ import { homeDir } from "./session.ts"
 import { allTools, findTool, installMcpTools, stopMcp } from "./tools.ts"
 import { registerDelegateTool } from "./subagent.ts"
 import { registerJobTools } from "./jobs.ts"
+import { registerOfficeTools } from "./office-tools.ts"
 import { SystemPrompt } from "./prompt.ts"
 import { telemetry } from "./telemetry.ts"
 
@@ -34,6 +35,8 @@ export interface BootManifest {
     subagent: boolean
     /** 遥测（只记数字与名字，不记内容） */
     telemetry: boolean
+    /** 办公文档四件套（docx/xlsx/pptx/pdf 读写）：默认关，开后才注册这 5 个工具 */
+    office: boolean
   }
   prompt: {
     /** 去掉这些分节 */
@@ -59,7 +62,7 @@ export const DEFAULT_MANIFEST: BootManifest = {
   version: MANIFEST_VERSION,
   maxSteps: DEFAULT_MAX_STEPS,
   exclude: [],
-  modules: { mcp: true, jobs: true, subagent: true, telemetry: true },
+  modules: { mcp: true, jobs: true, subagent: true, telemetry: true, office: false },
   prompt: { remove: [], set: {} },
 }
 
@@ -123,6 +126,7 @@ export async function applyManifest(m: BootManifest): Promise<BootedRuntime> {
   if (!m.modules.telemetry) telemetry.disable()
   if (m.modules.subagent) once("delegate", registerDelegateTool)
   if (m.modules.jobs) once("job_start", registerJobTools)
+  if (m.modules.office) once("create_document", registerOfficeTools)
 
   const mcpTools = m.modules.mcp ? await installMcpTools() : 0
 
