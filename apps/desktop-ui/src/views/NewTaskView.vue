@@ -21,17 +21,13 @@ import {
   approvalCode,
   createTask,
   appendTaskMessage,
-  fetchCheckpoints,
   fetchFollowup,
   fetchTask,
   fetchTaskEvents,
   STATE_LABEL,
   STEP_LABEL,
-  rollbackCheckpoint,
   streamTask,
-  undoLastChange,
   type Artifact,
-  type Checkpoint,
   type ContextUsage,
   type Step,
   type StreamEvent,
@@ -42,7 +38,7 @@ import { notifyTask, playChime, type ChimeKind } from '@/composables/useNotify';
 import { fetchSettings } from '@/api/settings';
 import { getAgentChoice, getApprovalMode, tsAgentAvailable, setApprovalMode, type ApprovalMode } from '@/api/tsAgent';
 import { answerTsPendingApproval, cancelTsAgentFor, isTsTaskId, replayTsTask, streamTsTask, tsSessionOf, tsTaskId } from '@/api/tsChannel';
-import { listTsCheckpoints, tsAgentContextUsage, undoTsCheckpoint, abandonTsIsolate, applyTsIsolate, diffTsIsolate, rewindTsSession, fetchTsModels, type TsIsolateDiff } from '@/api/tsAgent';
+import { tsAgentContextUsage, fetchTsModels } from '@/api/tsAgent';
 import { fetchFileContent, fetchFileRoots, openFilePath, type FilePreview } from '@/api/files';
 import { attachPaths, attachmentPreview, captureScreen, pickFiles, removeAttachment, type Attachment } from '@/api/attachments';
 
@@ -416,237 +412,6 @@ async function regenFollowups() {
 }
 
 /* ---------- T-092：改动与撤销 ---------- */
-/* 每一轮动过文件都会留一个回滚点；撤销 = 新建的删掉、改过的还原成改动前。
-   历史事件帧里不带"是否已被撤销"，所以打开历史任务时另拉一次权威列表。 */
-const checkpoints = ref<Checkpoint[]>([]);
-const undoing = ref(false);
-
-function upsertCheckpoint(c: Checkpoint) {
-  const i = checkpoints.value.findIndex((x) => x.id === c.id);
-  if (i >= 0) checkpoints.value[i] = c;
-  else checkpoints.value.unshift(c);
-}
-
-async function loadCheckpoints(id: string) {
-  try {
-    // TS 会话的回滚点在 TS 侧的影子仓库里，不在后端库——各查各的，别拿 TS id 去查后端
-    if (isTsTaskId(id)) {
-      const r = await listTsCheckpoints(tsSessionOf(id));
-      checkpoints.value = (r.checkpoints || []).map((c) => ({
-        id: c.id,
-        task_id: id,
-        round: c.step,
-        step_id: '',
-        step_title: 'TS 智能体执行中',
-        ts: c.ts,
-        undone: c.undone,
-        files: (c.files || []).map((f) => ({
-          path: f.rel,
-          existed_before: f.existed,
-          size_before: 0,
-          size_after: 0,
-          snapshot_ok: f.snapshot_ok,
-          reason: f.reason || '',
-        })),
-      }));
-      return;
-    }
-    checkpoints.value = await fetchCheckpoints(id);
-  } catch {
-    /* 拉不到就不显示撤销入口，不强撑 */
-  }
-}
-
-function undoSummary(r: { restored: string[]; deleted: string[]; skipped: { path: string; reason: string }[] }) {
-  const parts: string[] = [];
-  if (r.restored.length) parts.push(`还原 ${r.restored.join('、')}`);
-  if (r.deleted.length) parts.push(`删除 ${r.deleted.join('、')}`);
-  for (const s of r.skipped || []) parts.push(`${s.path} 未撤销：${s.reason}`);
-  return parts.join('；') || '没有文件需要回退';
-}
-
-async function undoCheckpoint(c: Checkpoint) {
-  if (!taskId.value || undoing.value) return;
-  undoing.value = true;
-  try {
-    /* TS 会话：撤销走主进程（TS 影子仓库），**不是**后端接口。
-       文案与 Python 侧保持一致——撤了什么、哪些没撤成，都要说出来。 */
-    if (isTsTaskId(taskId.value)) {
-      const r = await undoTsCheckpoint(tsSessionOf(taskId.value), c.id);
-      if (!r.ok) {
-        notices.value.push(r.reason || '撤销未生效');
-        return;
-      }
-      notices.value.push(
-        `已撤销第 ${c.round} 步改动：` +
-          undoSummary({
-            restored: r.restored || [],
-            deleted: [],
-            skipped: (r.skipped || []).map((s) => ({ path: s.rel, reason: s.reason })),
-          }),
-      );
-      await loadCheckpoints(taskId.value);
-      return;
-    }
-    // 最近的一轮走快捷入口（不用先知道回滚点 id），更早期的按 id 精确回滚
-    const newest = checkpoints.value.find((x) => !x.undone);
-    const r =
-      c.id === newest?.id
-        ? await undoLastChange(taskId.value)
-        : await rollbackCheckpoint(taskId.value, c.id);
-    if (!r.ok) {
-      // 撤销不了必须说原因（"已经撤销过了" / "没有任何一轮动过文件"），
-      // 不然按钮点了没反应，用户不知道是没撤还是撤了
-      notices.value.push(r.reason || '撤销未生效');
-      return;
-    }
-    notices.value.push(`已撤销第 ${r.round} 轮改动：${undoSummary(r)}`);
-    await loadCheckpoints(taskId.value);
-  } catch (e) {
-    notices.value.push(`撤销失败：${(e as Error).message}`);
-  } finally {
-    undoing.value = false;
-  }
-}
-
-/* ---------- TS-061：工作区隔离 ---------- */
-/** 提交前勾上"在副本里改"：这一轮**不动真工作区**，改动先落在副本上；
- *  跑完看差异，再决定合回还是丢弃。默认关——合回是有代价的动作，
- *  不该由用户顺手发生。 */
-const isolateOn = ref(false);
-const isoName = ref('');
-const isoBusy = ref(false);
-const isoDiff = ref<TsIsolateDiff | null>(null);
-const isoMsg = ref('');
-
-function applyIsolateEvent(ev: Extract<StreamEvent, { type: 'isolate' }>) {
-  if (ev.phase === 'failed') {
-    notices.value.push(`隔离没建起来：${ev.reason || '未知原因'}`);
-    isoMsg.value = ev.reason || '建隔离副本失败';
-    return;
-  }
-  isoName.value = ev.name;
-  isoDiff.value = null;
-  // 文案不写"这一轮"：副本可能跨轮次留着（用户可以稍后处理），
-  // 写成"这一轮"会在下一轮之后变成假话。
-  isoMsg.value = '有改动留在副本里，没进工作区。看完差异再决定合回还是丢弃。';
-}
-
-/** 差异文本：改动/新增/删除分开列，别让人自己从一堆路径里猜。 */
-const isoDiffText = computed(() => {
-  const d = isoDiff.value;
-  if (!d) return '';
-  const out: string[] = [];
-  if (d.changed.length) out.push(`改动 ${d.changed.length}：${d.changed.join('、')}`);
-  if (d.added.length) out.push(`新增 ${d.added.length}：${d.added.join('、')}`);
-  if (d.removed.length) out.push(`删除 ${d.removed.length}：${d.removed.join('、')}`);
-  return out.join('\n') || '副本与工作区没有差异（还没改东西，或已经合回过）';
-});
-
-function isolateSessionId(): string {
-  return taskId.value && isTsTaskId(taskId.value) ? tsSessionOf(taskId.value) : '';
-}
-
-async function loadIsolateDiff() {
-  const sid = isolateSessionId();
-  if (!sid || !isoName.value || isoBusy.value) return;
-  isoBusy.value = true;
-  isoMsg.value = '正在比对副本与工作区…';
-  try {
-    const r = await diffTsIsolate(sid, isoName.value);
-    if (!r.ok) {
-      isoMsg.value = r.reason || '看不了差异';
-      return;
-    }
-    isoDiff.value = { changed: r.changed || [], added: r.added || [], removed: r.removed || [] };
-    isoMsg.value = '';
-  } catch (e) {
-    isoMsg.value = (e as Error).message || '看不了差异';
-  } finally {
-    isoBusy.value = false;
-  }
-}
-
-async function applyIsolateNow() {
-  const sid = isolateSessionId();
-  if (!sid || !isoName.value || isoBusy.value) return;
-  isoBusy.value = true;
-  isoMsg.value = '正在合回工作区…';
-  try {
-    const r = await applyTsIsolate(sid, isoName.value);
-    if (!r.ok) {
-      isoMsg.value = r.reason || '合回没能全部完成（见提示）';
-      notices.value.push(`合回未完全成功：${r.reason || '部分文件没合成'}`);
-      return;
-    }
-    const parts: string[] = [];
-    if (r.restored?.length) parts.push(`写入/还原 ${r.restored.length} 个`);
-    if (r.deleted?.length) parts.push(`删除 ${r.deleted.length} 个`);
-    for (const s of r.skipped || []) parts.push(`${s.rel} 未合：${s.reason}`);
-    // 合回前留了回滚点才敢说"可撤销"；没留就必须说没留
-    isoMsg.value =
-      `${parts.join('；') || '没有文件需要合回'}。` +
-      (r.checkpoint ? '这一步已留回滚点，可在上面「文件改动」里撤销。' : '**没有留回滚点**（本次合回不可撤销）。');
-    isoDiff.value = null;
-    notices.value.push(`已把副本改动合回工作区：${parts.join('；') || '无变化'}`);
-  } catch (e) {
-    isoMsg.value = (e as Error).message || '合回失败';
-  } finally {
-    isoBusy.value = false;
-  }
-}
-
-async function abandonIsolateNow() {
-  const sid = isolateSessionId();
-  if (!sid || !isoName.value || isoBusy.value) return;
-  isoBusy.value = true;
-  try {
-    const r = await abandonTsIsolate(sid, isoName.value);
-    if (!r.ok) {
-      isoMsg.value = r.reason || '丢弃失败';
-      return;
-    }
-    notices.value.push(`已丢弃副本 ${isoName.value}（工作区没动过）`);
-    isoName.value = '';
-    isoDiff.value = null;
-    isoMsg.value = '';
-  } catch (e) {
-    isoMsg.value = (e as Error).message || '丢弃失败';
-  } finally {
-    isoBusy.value = false;
-  }
-}
-
-/* ---------- TS-063 撤销对话（/rewind 的另一半）---------- */
-/** 回到第 turn 轮**开始处**：那一轮的问题会被丢掉、可以换个问法重来。
- *  之后的事件**不删**（日志是 append-only 的真相源），只是不再进入上下文。 */
-const rwBusy = ref(false);
-/** 回退结果**常驻**显示在输入区上方。
- *  为什么不用 notices：notices 渲染在**折叠的"执行过程"区**里（引擎侧提示的归属），
- *  用户点了按钮却什么都看不到，正是"点了没反应"的那种体验——成品实测撞出来的。 */
-const rwMsg = ref('');
-async function rewindTo(turn: number, question: string) {
-  const sid = taskId.value && isTsTaskId(taskId.value) ? tsSessionOf(taskId.value) : '';
-  if (!sid || rwBusy.value) return;
-  rwBusy.value = true;
-  rwMsg.value = '';
-  try {
-    const r = await rewindTsSession(sid, turn);
-    if (!r.ok) {
-      rwMsg.value = `回退没成功：${r.reason || '未知原因'}`;
-      return;
-    }
-    // 界面跟着退：这一轮及之后沉入历史的部分去掉，原问题放回输入框（改问法重问）
-    history.value = history.value.slice(0, turn - 1);
-    prompt.value = question;
-    rwMsg.value = `已回到第 ${turn} 轮开始处；那一轮和之后的对话不再进入上下文，可以改个问法重问`;
-    nextTick(() => inputRef.value?.focus());
-  } catch (e) {
-    rwMsg.value = `回退失败：${(e as Error).message}`;
-  } finally {
-    rwBusy.value = false;
-  }
-}
 
 /* T-072：已消费到的最大事件 rev，断线续跑时用它补发缺失的帧 */
 const lastRev = ref(0);
@@ -1036,7 +801,6 @@ function resetRun() {
   artifacts.value = [];
   resetToolRuns();
   resetNotices();
-  checkpoints.value = []; // T-092：上一回合的回滚点不能串到下一回合
   followups.value = []; // S-24：上一回合的建议不该挂在新回合尾巴上
   followupMsg.value = '';
   lastRev.value = 0;
@@ -1144,7 +908,6 @@ async function openTask(id: string) {
     history.value = all;
     curUser.value = last?.user || t.title;
     runTitle.value = t.title;
-    await loadCheckpoints(id); // T-092：回滚点的"是否已撤销"以服务端为准
     // S-24：历史任务只读已存的建议（不为一个"回看"动作再花一次模型调用）
     if (!['pending', 'planning', 'running'].includes(t.state)) void loadFollowups(false);
     if (['pending', 'planning', 'running'].includes(t.state)) {
@@ -1486,10 +1249,6 @@ async function runTs(text: string, sessionId = '') {
         /* 用户选的模型必须逐轮传下去（`auto` 交给子进程的降级链裁决）。
            之前这里不传，界面上换了模型、实际跑的还是启动参数里那一个。 */
         model: model.value === 'auto' ? undefined : model.value,
-        /* TS-061：勾了"在副本里改"就走隔离。**读开关而不是传参**——
-           三个调用点（新建 / 追问 / 回放后追问）行为一致，不会漏掉某条路径。
-           只在 TS 模式生效：Python 侧那套是后端能力，这里不越界去替它开关。 */
-        isolate: useTs.value && isolateOn.value ? true : undefined,
       },
       (sid) => {
         // 拿到真实会话 id 才绑：追问要发回同一个会话，不然每问一次换一个上下文
@@ -1513,13 +1272,6 @@ async function runTs(text: string, sessionId = '') {
     errMsg.value = (e as Error).message || 'TS 智能体执行失败';
     announceResult();
   }
-}
-
-/* T-073：从中断处续跑——后端会把被中断的步骤重置为待执行，已产出内容留在上下文里 */
-function resumeRun() {
-  if (!taskId.value || busy.value) return;
-  phase.value = 'streaming';
-  void runOnce(runTitle.value, true);
 }
 
 /* T-073：停止 = 请求后端协作式取消（不是关闭 SSE）——关流只会让前端看不见，任务还在跑 */
@@ -1619,14 +1371,6 @@ function applyEvent(ev: StreamEvent) {
     }
     case 'artifact':
       artifacts.value.push(ev.artifact);
-      break;
-    case 'checkpoint':
-      // T-092：这一轮动了哪些文件 → 界面上出现"撤销这一轮"
-      upsertCheckpoint(ev.checkpoint);
-      break;
-    case 'isolate':
-      // TS-061：这一轮跑在副本里 → 出现"看差异 / 合回 / 丢弃"
-      applyIsolateEvent(ev);
       break;
     case 'approval':
       approvalMsg.value = ev.message;
@@ -1769,7 +1513,7 @@ function partColor(id: string): string {
 /** 拉一次用量（跑完 / 回放完对账用）：流里的 usage 帧是过程值，终局按落盘日志重算一次，
  *  保证"跑完看到的数字"与"下次打开这个会话看到的数字"是同一个。 */
 async function refreshUsage(): Promise<void> {
-  const sid = isolateSessionId();
+  const sid = taskId.value && isTsTaskId(taskId.value) ? tsSessionOf(taskId.value) : '';
   if (!sid) return;
   try {
     const r = await tsAgentContextUsage(sid);
@@ -1805,27 +1549,6 @@ async function loginAndRun() {
       <template v-for="(t, i) in history" :key="'h' + i">
         <div class="msg-user">
           <div class="msg-bubble">{{ t.user }}</div>
-          <!-- TS-063：从这一轮重跑。只给 TS 会话——它的历史是"事件日志投影"出来的，
-               回退有明确落点；Python 侧的回退语义与此不同，不在这里假装一致。 -->
-          <button
-            v-if="useTs && taskId"
-            class="rw-btn"
-            :disabled="rwBusy"
-            :title="'回到这一轮开始处：这一轮和之后的对话不再进入上下文，可以换个问法重来'"
-            :style="{
-              font: 'inherit',
-              fontSize: '11px',
-              color: 'var(--tx-3)',
-              background: 'transparent',
-              border: '1px solid var(--line)',
-              borderRadius: '6px',
-              padding: '1px 6px',
-              marginLeft: '6px',
-              cursor: rwBusy ? 'default' : 'pointer',
-              opacity: rwBusy ? 0.6 : 0.8,
-            }"
-            @click="rewindTo(i + 1, t.user)"
-          >{{ rwBusy ? '回退中…' : '从这里重跑' }}</button>
         </div>
         <div class="msg-ai">
           <div class="ai-head">
@@ -1913,14 +1636,10 @@ async function loginAndRun() {
             <span v-if="skillName" class="skill-chip" :title="skillTools.length ? '该技能可用工具：' + skillTools.join('、') : '该技能未声明工具（可用全部）'">
               <UIcon name="sparkle" :size="11" /> {{ skillName }}
             </span>
-            <!-- T-073：中断后可从断点继续 -->
-            <button v-if="phase === 'cancelled'" class="stop-btn" @click="resumeRun" title="从断点继续（已产出的内容会带进上下文）">
-              <UIcon name="play" :size="12" /> 继续
-            </button>
           </div>
 
           <!-- T-073：中断说明——说清"停在哪、丢了什么没丢什么" -->
-          <p v-if="phase === 'cancelled'" class="run-note">已中断：已产出的正文与产物都保留（步骤标记「已中断」），点「继续」可从断点续跑。</p>
+          <p v-if="phase === 'cancelled'" class="run-note">已中断：已产出的正文与产物都保留（步骤标记「已中断」）。</p>
           <!-- partial：跑完了但有失败——不说清，用户会对着全绿状态怀疑答案为什么不符 -->
           <p v-if="phase === 'partial'" class="run-note">本轮有工具调用未成功（见执行过程中标红的步骤），结果可能不完整——可追问重试失败的部分。</p>
 
@@ -2023,49 +1742,7 @@ async function loginAndRun() {
             <p v-if="artMsg" class="ra-msg">{{ artMsg }}</p>
           </div>
 
-          <!-- T-092：文件改动与撤销（模型动过的文件，人要能一键退回去） -->
-          <div v-if="checkpoints.length" class="run-ck">
-            <div class="ra-t">文件改动（{{ checkpoints.length }} 轮）</div>
-            <div v-for="c in checkpoints" :key="c.id" class="ck-item">
-              <UIcon name="book" :size="12" />
-              <span class="ck-n">
-                第 {{ c.round }} 轮 · {{ c.files.map((f) => f.path).join('、') || '（无文件）' }}
-              </span>
-              <span v-if="c.undone" class="ck-tag">已撤销</span>
-              <button
-                v-else
-                class="ra-save" :disabled="undoing"
-                :title="c.step_title ? `步骤：${c.step_title}` : '撤销这一轮的文件改动'"
-                @click="undoCheckpoint(c)"
-              >{{ undoing ? '撤销中…' : '撤销这一轮' }}</button>
-            </div>
-            <p class="ck-hint">只覆盖文件类改动；命令/终端造成的变化不在撤销范围内。</p>
-          </div>
-
-          <!-- TS-061：隔离副本。**改动还没落到工作区**——这是隔离的意义，
-               所以这张卡必须在按钮之外把当前状态说出来（否则用户以为已经改完了）。 -->
-          <!-- 同时挂 run-ck：样式与回滚点卡一致（视觉上是一类东西：都是"文件改动的凭据"），
-               另挂 run-iso 便于选择器区分这两张卡 -->
-          <div v-if="isoName" class="run-ck run-iso">
-            <div class="ra-t">
-              隔离副本 · {{ isoName }}
-              <span class="ck-tag">改动还没进工作区</span>
-            </div>
-            <div class="ck-item">
-              <UIcon name="folder" :size="12" />
-              <span class="ck-n">在副本上改的，不满意可以直接丢弃，原工作区一个字节都没动</span>
-              <button class="ra-save" :disabled="isoBusy" @click="loadIsolateDiff">查看差异</button>
-              <button class="ra-save" :disabled="isoBusy" @click="applyIsolateNow">合回工作区</button>
-              <button class="ra-save" :disabled="isoBusy" title="删掉副本；工作区不受影响" @click="abandonIsolateNow">丢弃</button>
-            </div>
-            <p v-if="isoMsg" class="ck-hint">{{ isoMsg }}</p>
-            <pre
-              v-if="isoDiff"
-              class="ck-hint"
-              style="white-space: pre-wrap; font-family: inherit; margin-top: 6px"
-            >{{ isoDiffText }}</pre>
-            <p class="ck-hint">隔离只复制工作区里的源码与数据：依赖目录、构建产物、.git 都不会进副本。</p>
-          </div>
+          
 
           <!-- S-24：智能跟进推荐——点一下就当追问发出去（不是摆着看的装饰）。
                没建议时不留空卡；后端给了原因就照实显示（关了开关 / 未登录 / 离线演示）。 -->
@@ -2097,8 +1774,7 @@ async function loginAndRun() {
             </template>
             <!-- 达到轮次上限：内容都还在上下文里，给用户"继续"而不是从头"重试" -->
             <template v-else-if="hitLimit">
-              <button class="ap-btn primary" @click="resumeRun">继续（从断点接着跑）</button>
-              <p class="run-note">已读 / 已写的内容都保留在上下文里，点「继续」会用新的预算接着跑，由你把控。</p>
+              <p class="run-note">已达轮次上限：已读 / 已写的内容都保留在上下文里。</p>
             </template>
             <template v-else>
               <button class="ap-btn primary" @click="retry">重试</button>
@@ -2131,11 +1807,6 @@ async function loginAndRun() {
     <!-- 输入区（下）：吸底固定——输出很长滚起来时，输入框不该跑出视线 -->
     <div class="dock">
       <div class="composer card" :class="{ running: busy }">
-        <!-- TS-063：回退结果常驻在这里（不塞 notices：它在折叠的过程区里，用户看不见） -->
-        <p
-          v-if="rwMsg"
-          style="margin: 0 0 6px; font-size: 12px; line-height: 1.5; color: var(--tx-2)"
-        >{{ rwMsg }}</p>
         <input
           ref="inputRef"
           v-model="prompt"
@@ -2280,16 +1951,6 @@ async function loginAndRun() {
               </div>
             </div>
           </div>
-
-          <!-- TS-061：隔离。默认关——合回是有代价的动作，不该由用户顺手发生 -->
-          <label
-            v-if="useTs"
-            style="display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--tx-2); cursor: pointer; padding: 0 4px;"
-            title="这一轮先在独立副本上改：跑完看差异，再决定合回还是丢弃"
-          >
-            <input v-model="isolateOn" type="checkbox" />
-            <span>在副本里改</span>
-          </label>
 
           <!-- 审批模式 -->
           <div class="pop-wrap">

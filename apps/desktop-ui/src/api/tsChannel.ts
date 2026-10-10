@@ -12,7 +12,7 @@
 //      撤销走主进程而不是后端接口，但界面上那张卡是同一张。
 //   2. **审批应答走主进程**（`approval/answer`），不是后端的 `/approve`。
 
-import type { Checkpoint, ContextUsage, StreamEvent, Step, SubagentTrace, Task } from './tasks';
+import type { ContextUsage, StreamEvent, Step, SubagentTrace, Task } from './tasks';
 import { answerTsAgentApproval, cancelTsAgent, onTsAgent, replayTsAgent, tsAgentPrompt, type TsAgentPromptArgs } from './tsAgent';
 import type { TsAgentPayload } from './backend';
 
@@ -236,25 +236,6 @@ export async function* streamTsTask(
             if (msg !== lastNotice) { lastNotice = msg; yield { type: 'notice', message: msg }; }
             break;
           }
-          /* TS-060：这一步动了哪些文件 → 复用界面**已有**的回滚点卡（T-092）。
-             形状对齐 Python 侧的 Checkpoint，撤销按钮因此不用再写一遍——
-             换的是数据来源（TS 影子仓库），不是界面。 */
-          case 'checkpoint':
-            if (e.id) yield { type: 'checkpoint', checkpoint: toUiCheckpoint(e, sessionId) };
-            break;
-          /* TS-061：这一轮跑在副本里。界面据此显示"查看差异 / 合回 / 丢弃"——
-             不显示的话用户会以为改动已经落到工作区上了。 */
-          case 'isolate/created':
-            yield { type: 'isolate', phase: 'created', name: String(e.isolate || ''), path: String(e.path || '') };
-            break;
-          case 'isolate/failed':
-            yield {
-              type: 'isolate',
-              phase: 'failed',
-              name: String(e.name || ''),
-              reason: String(e.reason || '建隔离副本失败'),
-            };
-            break;
           /* TS-066：步数进度。以前这一步的标题永远写着"TS 智能体执行中"——
              跑到第 90 步和刚起步长得一模一样，用户没法判断"是不是卡住了"。
              id 仍是 ts-1，界面按 id 原地更新，不会堆出一串步骤。 */
@@ -363,31 +344,6 @@ export async function* streamTsTask(
  *  调用方在轮边界做提交（与 Python 侧 openTask 的分段重建同一套节奏）。 */
 export type ReplayEvent = StreamEvent | { type: 'ts_turn'; user: string };
 
-/** TS 的 checkpoint 事件 → 界面那张 `Checkpoint` 卡（T-092 的形状）。
- *  字段换名（`rel`→`path`、`existed`→`existed_before`）就够，撤销入口因此复用。 */
-function toUiCheckpoint(e: { [k: string]: unknown }, sessionId: string): Checkpoint {
-  const files = Array.isArray(e.files) ? e.files : [];
-  return {
-    id: String(e.id || ''),
-    task_id: sessionId,
-    round: Number(e.step || 0),
-    step_id: '',
-    step_title: 'TS 智能体执行中',
-    ts: Date.now(),
-    undone: false,
-    files: files.map((raw) => {
-      const f = (raw || {}) as { rel?: unknown; existed?: unknown; snapshot_ok?: unknown; reason?: unknown };
-      return {
-        path: String(f.rel || ''),
-        existed_before: Boolean(f.existed),
-        size_before: 0,
-        size_after: 0,
-        snapshot_ok: Boolean(f.snapshot_ok),
-        reason: String(f.reason || ''),
-      };
-    }),
-  };
-}
 
 /**
  * T-131：回放一个 TS 会话——从落盘事件日志重建任务页事件流。
@@ -459,17 +415,6 @@ export async function* replayTsTask(sessionId: string): AsyncGenerator<ReplayEve
         }
         break;
       }
-      // 回放里的回滚点同样要能撤销：影子仓库是落盘的，会话早结束了照样退得回去
-      case 'checkpoint':
-        if (e.id) yield { type: 'checkpoint', checkpoint: toUiCheckpoint(e, sessionId) };
-        break;
-      // 同理：回放时也要能看见"这轮跑在副本里"，并继续看差异/合回/丢弃
-      case 'isolate/created':
-        yield { type: 'isolate', phase: 'created', name: String(e.isolate || ''), path: String(e.path || '') };
-        break;
-      case 'isolate/failed':
-        yield { type: 'isolate', phase: 'failed', name: String(e.name || ''), reason: String(e.reason || '建隔离副本失败') };
-        break;
       case 'context/compact': {
         const msg = '上下文接近预算，已压缩早期轮次（最近的内容保留）';
         if (msg !== lastNotice) { lastNotice = msg; yield { type: 'notice', message: msg }; }
