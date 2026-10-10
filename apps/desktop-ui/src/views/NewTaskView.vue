@@ -2002,6 +2002,15 @@ async function loginAndRun() {
             <span class="pd" style="background:#4d80f0"><UIcon name="book" :size="10" /></span>
           </div>
 
+          <!-- 本地 / 工作区文件：搬进这一行（+ 与 spacer 之间）。
+               它们和「这次在哪干活、看哪里的文件」直接相关，本该与加附件、选模型
+               同处一条操作行；单独占一行只会把输入区往下顶、多切一条视觉分界。 -->
+          <div class="local-chips">
+            <button class="local-chip" data-coming aria-disabled="true" title="本地工作区功能开发中，敬请期待" disabled><UIcon name="monitor" :size="12" /> 本地 <UIcon name="chevron-down" :size="10" /></button>
+            <!-- T-089：接上真文件树——看 agent 在工作区里写了什么 -->
+            <button class="local-chip" title="查看 agent 工作区的文件（只读）" @click="openWorkspaceFiles"><UIcon name="folder" :size="12" /> 工作区文件 <UIcon name="chevron-right" :size="10" /></button>
+          </div>
+
           <div class="spacer" />
 
           <!-- 模型选择 -->
@@ -2055,7 +2064,7 @@ async function loginAndRun() {
             </div>
 
             <button class="bar-btn ghost" @click="toggleModel">
-              {{ modelLabel }} <UIcon name="chevron-down" :size="11" />
+              <span class="ml-text">{{ modelLabel }}</span> <UIcon name="chevron-down" :size="11" />
             </button>
             <div v-if="modelOpen" class="pop-menu right model-menu" @click.stop @mouseleave="modelHover = null">
               <div class="pop-head2">可用模型</div>
@@ -2136,13 +2145,6 @@ async function loginAndRun() {
         <!-- S-20：录音/转写的状态与失败原因——"点了没反应"最伤人，转写中、出错都要看得见 -->
         <p v-if="voiceError" class="voice-msg err">{{ voiceError }}</p>
         <p v-else-if="voiceWorking" class="voice-msg">正在识别…</p>
-      </div>
-
-      <!-- 本地 / 文件夹 -->
-      <div class="local-bar">
-        <button class="local-chip" data-coming aria-disabled="true" title="本地工作区功能开发中，敬请期待" disabled><UIcon name="monitor" :size="12" /> 本地 <UIcon name="chevron-down" :size="10" /></button>
-        <!-- T-089：接上真文件树——看 agent 在工作区里写了什么 -->
-        <button class="local-chip" title="查看 agent 工作区的文件（只读）" @click="openWorkspaceFiles"><UIcon name="folder" :size="12" /> 工作区文件 <UIcon name="chevron-right" :size="10" /></button>
       </div>
 
       <!-- T-089：工作区面板（文件树 + 预览 + 真 PTY 终端）。 -->
@@ -2313,7 +2315,12 @@ async function loginAndRun() {
   height: 28px; padding: 0 8px; border-radius: 7px; color: var(--t1); font-size: 12.5px;
 }
 .bar-btn:hover { background: var(--line-2); }
-.bar-btn.ghost { color: var(--t1); font-weight: 500; }
+.bar-btn.ghost { color: var(--t1); font-weight: 500; min-width: 0; }
+/* 模型名（可能是很长的自定义名）在挤的时候走**省略号**，不折行：
+   折行的下场是逐字竖排成一列，把整条 bar 顶高、和旁边按钮参差不齐。 */
+.ml-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 图标不参与收缩，否则箭头会被压没 */
+.bar-btn svg { flex: none; }
 .model-group { display: inline-flex; align-items: center; gap: 4px; }
 .ctx-ring-btn {
   width: 26px; padding: 0; justify-content: center; background: transparent;
@@ -2439,12 +2446,18 @@ async function loginAndRun() {
 /* 执行中：发送键变停止键（红底方块），与 EvaWork 的停止交互一致 */
 .send-btn.stop { background: #e5484d; }
 .send-btn.stop:disabled { opacity: 0.55; }
-.local-bar { display: flex; gap: 8px; margin-top: 12px; }
+/* 本地 / 工作区文件：搬进 composer-bar 那一行，与 + / 模型 / 发送同排。
+   flex:none —— 不被 spacer 或长模型名挤压变形（标签被压成竖排是最难看的坏法）。 */
+.local-chips { display: inline-flex; align-items: center; gap: 6px; flex: none; }
 .local-chip {
   display: inline-flex; align-items: center; gap: 5px;
-  height: 26px; padding: 0 10px; border-radius: 8px; font-size: 12px; color: var(--t1);
-  border: 1px solid var(--line); background: var(--panel);
+  height: 26px; padding: 0 9px; border-radius: 8px; font-size: 12px; color: var(--t1);
+  border: 1px solid var(--line); background: var(--panel); cursor: pointer; flex: none;
 }
+.local-chip:hover { background: var(--line-2); }
+/* 「本地」还是占位（未开发）：不能给出"点得动"的假象——灰掉、连悬停反馈也去掉 */
+.local-chip:disabled { cursor: default; opacity: 0.55; }
+.local-chip:disabled:hover { background: var(--panel); }
 .local-chip.faint { border-color: transparent; background: none; color: var(--t2); }
 .chips-row { display: flex; align-items: center; gap: 10px; margin-top: 34px; flex-wrap: wrap; }
 .quick-chip {
