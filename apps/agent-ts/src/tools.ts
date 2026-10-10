@@ -42,6 +42,79 @@ export function findTool(name: string): ToolDef | undefined {
   return registry.get(name)
 }
 
+/**
+ * 上游（OpenAI 兼容）只认这几个**单值**类型。JSON Schema 允许的其它写法
+ * （`type` 是数组、`anyOf`、只有 `enum`/`const`）到线上之前都得收敛成一个。
+ */
+const JSON_TYPES = new Set(["string", "number", "integer", "boolean", "array", "object", "null"])
+
+/** 白名单过滤：不认识的一律落到 fallback。`fallback = ""` 用作"合法性判定"。 */
+function wireType(t: unknown, fallback = "string"): string {
+  const s = typeof t === "string" ? t : ""
+  return JSON_TYPES.has(s) ? s : fallback
+}
+
+/** 按**取值本身**推类型：枚举 / `const` 不写 `type` 是常见写法。 */
+function jsType(v: unknown): string {
+  if (typeof v === "number") return Number.isInteger(v) ? "integer" : "number"
+  if (typeof v === "string") return "string"
+  if (typeof v === "boolean") return "boolean"
+  if (v === null) return "null"
+  return Array.isArray(v) ? "array" : typeof v === "object" ? "object" : ""
+}
+
+/** 认不出来返回空串（外层再兜底），这样递归里能区分"没有类型"和"类型就是 string"。 */
+function detectJsonType(node: unknown, depth: number): string {
+  if (!node || typeof node !== "object" || depth > 3) return ""
+  const n = node as { type?: unknown; anyOf?: unknown; oneOf?: unknown; enum?: unknown; const?: unknown }
+
+  const direct = wireType(n.type, "")
+  if (direct) return direct
+
+  if (Array.isArray(n.type)) {
+    // 可空常写成 `["string","null"]`；让非 null 那支优先，null 只作最后选择
+    const members = n.type.filter((t) => t !== "null")
+    for (const t of members.length ? members : n.type) {
+      const got = wireType(t, "")
+      if (got) return got
+    }
+  }
+
+  // zod 的 `.union()` 在某些版本/配置下导出成 anyOf（而不是 type 数组），一并认
+  for (const branch of [n.anyOf, n.oneOf]) {
+    if (!Array.isArray(branch)) continue
+    for (const b of branch) {
+      const got = detectJsonType(b, depth + 1)
+      if (got && got !== "null") return got
+    }
+  }
+
+  const sample = Array.isArray(n.enum) ? n.enum.find((x) => x !== null) : n.const
+  return sample === undefined ? "" : jsType(sample)
+}
+
+/**
+ * 把 JSON Schema 的一个属性节点收敛成**单个**上游能接受的类型。
+ *
+ * 为什么必须收敛：MCP 的 `inputSchema` 是完整 JSON Schema，**`type` 可以是数组**
+ * （`["boolean","string"]` 表示联合类型，zod 的 `.union()`/`.or()` 就是这么导出的）。
+ * 早先这里是 `String(v.type)`，数组会被拼成 `"boolean,string"` 这个**两边都不是**的串，
+ * 整个请求在模型开工前就被上游 400 打回：
+ *
+ *   Invalid schema for function 'mcp__Sequential_Thinking__sequentialthinking':
+ *   "boolean,string" is not valid under any of the schemas listed in the 'anyOf' keyword
+ *
+ * 后果不是"某个工具不可用"，而是**只要装了这类 MCP server，之后每一轮请求都失败**
+ * （schema 校验发生在模型看到消息之前），用户看到的是一个与 MCP 毫无字面关系的报错。
+ *
+ * 收敛顺序：单值 → 数组取首个非 null → anyOf/oneOf 递归 → enum/const 按取值推 → `string` 兜底。
+ * **取联合里的哪一支不影响执行**：MCP server 仍按它自己的 schema 校验实参，联合类型两支
+ * 都收；这里只决定"告诉模型这个参数长什么样"。
+ */
+function jsonSchemaType(node: unknown): string {
+  return detectJsonType(node, 0) || "string"
+}
+
 /** 转成 OpenAI function schema（模型只认这个形状）。 */
 export function openaiSchemas(tools: ToolDef[] = allTools()): unknown[] {
   return tools.map((t) => ({
@@ -52,7 +125,9 @@ export function openaiSchemas(tools: ToolDef[] = allTools()): unknown[] {
       parameters: {
         type: "object",
         properties: Object.fromEntries(
-          t.parameters.map((p) => [p.name, { type: p.type, description: p.desc }]),
+          // 出口再滤一遍：正常路径上 MCP 那边已经收敛过（见 jsonSchemaType），
+          // 这里是防**手写 ToolParam 打错字**——一个参数类型写错不该让整轮请求 400
+          t.parameters.map((p) => [p.name, { type: wireType(p.type), description: p.desc }]),
         ),
         required: t.parameters.filter((p) => p.required).map((p) => p.name),
       },
@@ -288,14 +363,19 @@ defineTool({
 
 const mcpClients: McpClient[] = []
 
-/** inputSchema 的 properties 转成我们的参数表；没有 schema 就不声明（模型自己按名字给）。 */
+/**
+ * inputSchema 的 properties 转成我们的参数表；没有 schema 就不声明（模型自己按名字给）。
+ *
+ * `type` **必须**过 `jsonSchemaType`：MCP 的 schema 允许联合类型（`type` 是数组），
+ * 直接 String 出来是个非法类型串，会让每一轮请求都被上游 400 打回（详见该函数注释）。
+ */
 function paramsFromSchema(schema: unknown): ToolParam[] {
   const props = (schema as { properties?: Record<string, any> })?.properties
   if (!props || typeof props !== "object") return []
   const required = new Set<string>(((schema as { required?: string[] })?.required) || [])
   return Object.entries(props).map(([k, v]) => ({
     name: k,
-    type: String((v as any)?.type || "string"),
+    type: jsonSchemaType(v),
     required: required.has(k),
     desc: String((v as any)?.description || k),
   }))
