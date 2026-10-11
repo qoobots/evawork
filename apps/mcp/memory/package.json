@@ -1,0 +1,9 @@
+{
+  "name": "@evawork/mcp-memory",
+  "version": "0.1.0",
+  "private": true,
+  "description": "内置 MCP 服务：Memory（官方，基于知识图谱的长期记忆）。目录条目见 desktop-node/data/catalog.json",
+  "dependencies": {
+    "@modelcontextprotocol/server-memory": "^2026.8.31"
+  }
+}

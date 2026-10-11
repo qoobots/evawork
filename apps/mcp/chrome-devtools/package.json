@@ -1,0 +1,9 @@
+{
+  "name": "@evawork/mcp-chrome-devtools",
+  "version": "0.1.0",
+  "private": true,
+  "description": "内置 MCP 服务：Chrome DevTools（官方，性能追踪、内存与网络诊断、抓取控制台错误）",
+  "dependencies": {
+    "chrome-devtools-mcp": "^1.10.1"
+  }
+}

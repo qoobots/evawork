@@ -1,0 +1,24 @@
+# **显式列举，不用 `apps/*`**：apps/agent-ts 是**零依赖、不参与构建**的运行时——
+# 它由外部真 Node 直接跑源码（连 node_modules 都没有），被 pnpm 收编只会凭空多出
+# install 步骤与链接，且容易被根上的 typecheck/build 脚本扫到。用 glob 就会踩到。
+packages:
+  - 'apps/desktop-node'
+  - 'apps/desktop-ui'
+  # MCP 服务打包包：随应用分发，让 npx 类服务跑本地副本（见 spawn.ts 的本地解析）
+  - 'apps/mcp-bundle'
+  # 内置 MCP 服务：一个服务一个薄包，依赖各自声明；由 mcp-bundle 聚合后随包分发
+  - 'apps/mcp/*'
+
+allowBuilds:
+  electron: true
+  esbuild: true
+  vue-demi: true
+
+minimumReleaseAgeExclude:
+  - isomorphic-git@1.43.1
+
+# pnpm ≥10.6：允许运行构建脚本的依赖（esbuild 平台二进制、vue-demi、electron 二进制下载）
+onlyBuiltDependencies:
+  - esbuild
+  - vue-demi
+  - electron

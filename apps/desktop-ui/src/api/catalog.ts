@@ -28,6 +28,8 @@ export interface CatalogItem {
   /** T-076：本地真有 SKILL.md（可用 `/name` 唤起）；`local`=市场里没有、纯本地技能。 */
   loaded?: boolean;
   local?: boolean;
+  /** 技能来源（扫描根的 rank 决定）：项目级 / 自定义 / 用户级 / 随包内置。界面据此挂徽章。 */
+  scope?: 'project' | 'custom' | 'user' | 'builtin';
   /** T-141b / T3：能力声明（network/fs_write/command/context）；安装弹层据此人话展示，未声明则按 network 处理 */
   capabilities?: string[];
   /** T-142 / T2：版本号，用于更新检测 */

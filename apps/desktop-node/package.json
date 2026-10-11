@@ -42,7 +42,7 @@
         "to": "ui"
       },
       {
-        "from": "resources/skills",
+        "from": "../skills",
         "to": "skills"
       },
       {

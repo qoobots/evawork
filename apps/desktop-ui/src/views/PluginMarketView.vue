@@ -1029,9 +1029,12 @@ const artBg: Record<string, string> = {
               <div class="plug-info">
                 <div class="plug-name">
                   {{ s.name }}
-                  <!-- T-076：本地真有 SKILL.md 才标"已加载"——市场名片不等于能用。
-                       本地/内置技能只挂一个徽章：两个都挂等于把同一句话说两遍。 -->
-                  <span v-if="s.local" class="plug-tag local" title="内置技能，随应用分发，已在本地可用">内置</span>
+                  <!-- 徽章说的是"这个技能从哪来"：随包内置 / 项目级 / 本机 / 市场已加载。
+                       只挂一个：两个都挂等于把同一句话说两遍。 -->
+                  <span v-if="s.scope === 'builtin'" class="plug-tag local" title="内置技能，随应用分发（apps/skills）">内置</span>
+                  <span v-else-if="s.scope === 'project'" class="plug-tag local" title="项目级技能（工作区 .evawork/skills、.eva-skills、skills）">项目</span>
+                  <span v-else-if="s.scope === 'custom'" class="plug-tag local" title="EVAWORK_SKILL_DIR 指定的技能目录">自定义</span>
+                  <span v-else-if="s.local" class="plug-tag local" title="本机技能（~/.evawork/skills）">本机</span>
                   <span v-else-if="s.loaded" class="plug-tag" title="本地已加载该技能（可用 /name 唤起）">已加载</span>
                 </div>
                 <div class="plug-desc" :title="s.desc">{{ s.desc }}</div>

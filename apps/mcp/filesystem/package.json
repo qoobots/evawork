@@ -1,0 +1,9 @@
+{
+  "name": "@evawork/mcp-filesystem",
+  "version": "0.1.0",
+  "private": true,
+  "description": "内置 MCP 服务：Filesystem（官方，工作区文件读写，必须给至少一个允许目录）",
+  "dependencies": {
+    "@modelcontextprotocol/server-filesystem": "^2026.8.31"
+  }
+}

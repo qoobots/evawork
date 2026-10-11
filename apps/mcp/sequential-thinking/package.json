@@ -1,0 +1,9 @@
+{
+  "name": "@evawork/mcp-sequential-thinking",
+  "version": "0.1.0",
+  "private": true,
+  "description": "内置 MCP 服务：Sequential Thinking（官方，结构化逐步推理）",
+  "dependencies": {
+    "@modelcontextprotocol/server-sequential-thinking": "^2026.8.31"
+  }
+}

@@ -102,6 +102,9 @@ function setFavorite(title, faved) {
 /** 本地分类名：本机技能在市场里没有对应条目，用这个分类把它们归到一起。 */
 const LOCAL_CAT = '本地';
 
+/** 技能来源 → 界面文案。scope 由扫描根决定（见 skillRoots）。 */
+const SCOPE_LABEL = { project: '项目', custom: '自定义', user: '本机', builtin: '内置' };
+
 /** 本机技能 → 目录条目形状。标记 local/loaded：市场里没有，但**真能 /name 唤起**。 */
 function localSkillItems() {
   return discoverSkills(getWorkspace()).map((s) => ({
@@ -111,9 +114,10 @@ function localSkillItems() {
     color: '#e8f3ec',
     cats: [LOCAL_CAT],
     category: LOCAL_CAT,
-    origin: '本机',
+    origin: SCOPE_LABEL[s.scope] || '本机',
     loaded: true, // 磁盘上真有 SKILL.md
     local: true, // 市场里没有，纯本地技能
+    scope: s.scope || 'user', // 项目 / 自定义 / 用户 / 随包内置——界面据此挂不同徽章
     install_kind: 'local',
     spec: '',
   }));
@@ -167,15 +171,19 @@ function meta() {
 }
 
 /* ---------- 本地已装技能（T-076） ----------
-   目录顺序与命名**必须与 agent-ts 的 skill.ts 一致**（用户级 → 项目级），
-   否则界面列出来的技能跟内核能 load 到的不是同一批——那才是最难查的一类 bug。
-   只列"真在磁盘上"的技能，不按市场清单编。 */
+   只列"真在磁盘上"的技能，不按市场清单编。
+
+   优先级沿用 dsh 的 rank 表：**数字小的赢**（项目级 → 自定义 → 用户级 → 随包内置）。
+   内置排最后是有意的：项目/用户在同名技能上的覆盖必须赢，内置只当兜底；
+   反过来就是"用户改了不生效"这种最难查的坑。 */
+
+const RANK = { project: 100, projectLegacy: 200, custom: 300, user: 400, bundled: 600 };
 
 /**
  * 随应用分发的内置技能目录（装机就有，不再依赖用户机器上恰好有一份）。
  *
- * 布局与 MCP bundle 同理：开发态在 `apps/desktop-node/resources/skills`，
- * 打包态在 `resources/skills`。可用 EVA_SKILL_BUNDLE 显式指定（调试用）。
+ * 技能源码在项目下维护：`apps/skills`（开发态）/ `resources/skills`（打包态）。
+ * 可用 EVA_SKILL_BUNDLE 显式指定（调试用）。
  */
 function bundledSkillDir() {
   const explicit = String(process.env.EVA_SKILL_BUNDLE || '').trim();
@@ -184,23 +192,32 @@ function bundledSkillDir() {
     const p = path.join(process.resourcesPath, 'skills');
     if (fs.existsSync(p)) return p;
   }
-  return path.resolve(__dirname, '..', 'resources', 'skills');
+  return path.resolve(__dirname, '..', '..', 'skills');
 }
 
-function skillDirs(workspace) {
-  const env = String(process.env.EVAWORK_SKILL_DIR || '').trim();
-  const userDir = env || path.join(os.homedir(), '.evawork', 'skills');
+/** 技能扫描根：返回 `{ path, scope, rank }`，已按 rank 升序（= 优先级降序）。 */
+function skillRoots(workspace) {
   const ws = path.resolve(String(workspace || ''));
-  /* 顺序即优先级：用户级 → 项目级 → 随包内置。
-     内置放最后：用户在同名技能上做的覆盖/改写必须赢，内置只当兜底。 */
-  const list = [userDir, path.join(ws, '.evawork', 'skills'), path.join(ws, '.eva-skills'), path.join(ws, 'skills'), bundledSkillDir()];
-  return list.filter((p) => {
-    try {
-      return fs.statSync(p).isDirectory();
-    } catch {
-      return false;
-    }
-  });
+  const env = String(process.env.EVAWORK_SKILL_DIR || '').trim();
+  const roots = [
+    { path: path.join(ws, '.evawork', 'skills'), scope: 'project', rank: RANK.project },
+    { path: path.join(ws, '.eva-skills'), scope: 'project', rank: RANK.projectLegacy },
+    { path: path.join(ws, 'skills'), scope: 'project', rank: RANK.projectLegacy },
+    // 显式指定了自定义目录就顶掉用户级，而不是两个都扫（两个都扫时同名技能谁赢说不清）
+    env
+      ? { path: env, scope: 'custom', rank: RANK.custom }
+      : { path: path.join(os.homedir(), '.evawork', 'skills'), scope: 'user', rank: RANK.user },
+    { path: bundledSkillDir(), scope: 'builtin', rank: RANK.bundled },
+  ];
+  return roots
+    .filter((r) => {
+      try {
+        return fs.statSync(r.path).isDirectory();
+      } catch {
+        return false;
+      }
+    })
+    .sort((a, b) => a.rank - b.rank);
 }
 
 /**
@@ -240,28 +257,28 @@ function parseSkillFile(file, entryName) {
 function discoverSkills(workspace) {
   const out = [];
   const seen = new Set();
-  for (const dir of skillDirs(workspace)) {
+  for (const root of skillRoots(workspace)) {
     let entries = [];
     try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
+      entries = fs.readdirSync(root.path, { withFileTypes: true });
     } catch {
       continue;
     }
     for (const e of entries) {
       // 两种形态都认：skills/foo.md 与 skills/foo/SKILL.md（与 agent-ts 一致）
       const candidates = e.isDirectory()
-        ? [path.join(dir, e.name, 'SKILL.md')]
+        ? [path.join(root.path, e.name, 'SKILL.md')]
         : e.name.toLowerCase().endsWith('.md')
-          ? [path.join(dir, e.name)]
+          ? [path.join(root.path, e.name)]
           : [];
       for (const f of candidates) {
         if (!fs.existsSync(f)) continue;
         const s = parseSkillFile(f, e.name);
         if (!s || !s.name) continue;
         const key = s.name.toLowerCase();
-        if (seen.has(key)) continue; // 前面的目录优先
+        if (seen.has(key)) continue; // rank 小的根先扫到，它的同名技能赢
         seen.add(key);
-        out.push(s);
+        out.push({ ...s, scope: root.scope, rank: root.rank });
       }
     }
   }
@@ -280,9 +297,10 @@ function installedSkills(workspace) {
       scripts: [],
       path: s.path,
       source: 'local',
+      scope: s.scope || 'user',
       tools: [],
     })),
-    root: skillDirs(workspace)[0] || '',
+    root: skillRoots(workspace)[0]?.path || '',
     total: items.length,
   };
 }

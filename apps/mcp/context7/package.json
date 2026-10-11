@@ -1,0 +1,9 @@
+{
+  "name": "@evawork/mcp-context7",
+  "version": "0.1.0",
+  "private": true,
+  "description": "内置 MCP 服务：Context7（Upstash 官方，按版本拉取最新库文档）",
+  "dependencies": {
+    "@upstash/context7-mcp": "^4.2.0"
+  }
+}

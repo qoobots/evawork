@@ -1,0 +1,9 @@
+{
+  "name": "@evawork/mcp-everything",
+  "version": "0.1.0",
+  "private": true,
+  "description": "内置 MCP 服务：Everything（官方参考服务，覆盖 MCP 协议全部特性，用于自检与联调）",
+  "dependencies": {
+    "@modelcontextprotocol/server-everything": "^2026.8.31"
+  }
+}

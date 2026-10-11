@@ -1,0 +1,9 @@
+{
+  "name": "@evawork/mcp-playwright",
+  "version": "0.1.0",
+  "private": true,
+  "description": "内置 MCP 服务：Playwright（微软官方，驱动真实浏览器做导航/点击/截图/表单）",
+  "dependencies": {
+    "@playwright/mcp": "^0.0.83"
+  }
+}
