@@ -58,7 +58,7 @@ const CHANNEL_IDLE_MS = 300_000;
  * 而同会话重跑本就会重投影事件日志，那其实是续跑不是重来，叫错了连事实都不符。
  * 其余（真错误 / 死循环 / 进程被杀）才走"出错 + 重试"。
  */
-const BUDGET_STOPS = new Set(['max_steps', 'deadline', 'timeout', 'stalled']);
+const BUDGET_STOPS = new Set(['deadline', 'timeout', 'stalled']);
 
 /** 停止一轮（协作式：TS 侧在本步边界停下）。传任务页里的 taskId。 */
 export async function cancelTsAgentFor(taskId: string): Promise<void> {
@@ -220,18 +220,14 @@ export async function* streamTsTask(
           }
           /* TS-066：步数进度。以前这一步的标题永远写着"TS 智能体执行中"——
              跑到第 90 步和刚起步长得一模一样，用户没法判断"是不是卡住了"。
+             没有"共几步"那半句：步数由模型自己决定，没有上限可显示。
              id 仍是 ts-1，界面按 id 原地更新，不会堆出一串步骤。 */
           case 'agent/step': {
             const n = Number(e.step || 0);
-            const m = Number(e.maxSteps || 0);
             if (n > 0) {
               yield {
                 type: 'step',
-                step: stepOf(
-                  'ts-1',
-                  m > 0 ? `TS 智能体执行中（第 ${n}/${m} 步）` : `TS 智能体执行中（第 ${n} 步）`,
-                  'running',
-                ),
+                step: stepOf('ts-1', `TS 智能体执行中（第 ${n} 步）`, 'running'),
               };
             }
             break;
@@ -259,7 +255,7 @@ export async function* streamTsTask(
         }
         // idle：本轮结束。stop 说明它是怎么结束的——**终止方式必须如实呈现**：
         // - cancelled → "已中断"
-        // - 预算/上限类（max_steps / deadline / timeout / stalled）→ 已做的产出都在
+        // - 预算类（deadline / timeout / stalled）→ 已做的产出都在
         //   上下文里：按"limit"呈现，界面给"继续"，**不给"重试"**（那暗示从头重来）
         // - 真失败类（guard 死循环 / error / killed 进程退出）→ 按"出错"呈现并给"重试"，
         //   正文已流出的部分保留
@@ -361,15 +357,11 @@ export async function* replayTsTask(sessionId: string): AsyncGenerator<ReplayEve
       case 'agent/continuation':
         yield { type: 'narration', step };
         break;
-      // 回放同样要显示"第 N/上限 步"：看历史任务时也得能看出它跑到哪停的
+      // 回放同样要显示"第 N 步"：看历史任务时也得能看出它跑到哪停的
       case 'agent/step': {
         const n = Number(e.step ?? 0);
-        const m = Number(e.maxSteps ?? 0);
         if (n > 0) {
-          yield {
-            type: 'step',
-            step: stepOf('ts-1', m > 0 ? `TS 智能体执行中（第 ${n}/${m} 步）` : `TS 智能体执行中（第 ${n} 步）`, 'running'),
-          };
+          yield { type: 'step', step: stepOf('ts-1', `TS 智能体执行中（第 ${n} 步）`, 'running') };
         }
         break;
       }

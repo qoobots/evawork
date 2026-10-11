@@ -9,7 +9,6 @@
 
 import fs from "node:fs"
 import path from "node:path"
-import { DEFAULT_MAX_STEPS } from "./budget.ts"
 import { homeDir } from "./session.ts"
 import { allTools, findTool, installMcpTools, stopMcp } from "./tools.ts"
 import { registerDelegateTool } from "./subagent.ts"
@@ -22,8 +21,6 @@ export const MANIFEST_VERSION = 1
 
 export interface BootManifest {
   version: number
-  /** 默认轮次上限 */
-  maxSteps: number
   /** 从暴露给模型的工具里剔除的名字 */
   exclude: string[]
   modules: {
@@ -46,21 +43,8 @@ export interface BootManifest {
   }
 }
 
-/** 一个 turn 的默认轮次上限。
- *  此前散成 7 处硬编码的 `12`（清单 / CLI 两处 / loop / guard / 主进程 core），
- *  改一次要动六个文件，漏一处就出现"界面改了、子进程没改"。
- *  12 太紧：真实任务经常在第 12 步被截断，用户只能点「继续」再发一轮。
- *
- *  现在默认 30：简单任务通常几步就完，不必硬跑满；复杂任务可由模型通过
- *  `set_max_steps` 主动申请扩展到硬顶 `MAX_STEPS_HARD_CAP`。 */
-// 常量本体在 budget.ts（叶子模块）：boot ↔ tools 是循环依赖，常量放这里会被
-// tools.ts 顶层读到未初始化的绑定，ts-agent 直接起不来。详见 budget.ts 注释。
-export { DEFAULT_MAX_STEPS }
-export { MAX_STEPS_HARD_CAP } from "./budget.ts"
-
 export const DEFAULT_MANIFEST: BootManifest = {
   version: MANIFEST_VERSION,
-  maxSteps: DEFAULT_MAX_STEPS,
   exclude: [],
   modules: { mcp: true, jobs: true, subagent: true, telemetry: true, office: false },
   prompt: { remove: [], set: {} },

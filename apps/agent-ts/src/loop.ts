@@ -3,10 +3,10 @@
 // 一个 **step** = 一次模型请求 + 它调用的工具；一个 **turn** = 若干 step，直到模型不再要工具。
 // （这个概念与 deepseek-harness 的 turn flow 一致，Python 版 evawork 里叫"步骤"。）
 //
-// 两条刻意的边界：
-//   1. **有轮次上限**。dsh 没有内置上限（它要求调用方用 `agent/turn-stopping` 自行封顶），
-//      而 evawork 实测撞过"工具轮次上限"——所以这里默认 12 步，到了就如实停下，
-//      绝不假装任务完成了。
+// 刻意的边界：
+//   1. **不按步数收口**。跑多少步由模型按任务复杂度自己决定——写死一个上限等于替它猜，
+//      猜小了只能让用户点「继续」补救，猜大了这个上限又形同虚设。真正的失控有两种：
+//      绕不出来（`LoopGuard` 的重复调用 / 无进展）和跑太久（墙钟），都在 `guard.ts` 里管。
 //   2. **取消是协作式**的：收到 AbortSignal 就在当前 step 边界停，已拿到的正文原样保留，
 //      不重发、不重试（用户已经不想看了）。
 
@@ -14,28 +14,11 @@ import type { LlmConfig, Message, SessionEvent, StreamChunk, ToolCall, ToolResul
 import type { StopReason } from "./types.ts"
 export type { StopReason }
 
-/**
- * 步数预算到点时给模型的提醒。
- *
- * 这一步以前是"撞线就停 → 界面弹「继续」→ 用户决定"。用户要的是反过来：
- * **由模型自己判断该不该继续**，所以这里把预算现状和两个明确选项交给它，
- * 并要求它把"还需要多少步、为什么"讲出来——步数于是变成模型按任务复杂度
- * 分析出来的结果，而不是一个写死的数字。
- */
-function budgetNotice(maxSteps: number): string {
-  return [
-    `[轮次预算] 本轮步数预算（${maxSteps} 步）已用尽。请评估后二选一：`,
-    `1) 任务已完成 → 直接给出最终结论，本轮不要再调用其它工具；`,
-    `2) 确实还需要继续 → 调用 set_max_steps，说明还需要多少步及理由（最多可到 ${MAX_STEPS_HARD_CAP} 步）。`,
-    `不要在不说明的情况下继续调用其它工具。`,
-  ].join("\n")
-}
 import { streamChat } from "./llm.ts"
 import { allTools, executeTool, openaiSchemas, parseArgs, preExecute } from "./tools.ts"
 import type { SessionLog } from "./session.ts"
 import { defaultStopConditions, firstStop, LoopGuard } from "./guard.ts"
 import type { StopCondition } from "./guard.ts"
-import { DEFAULT_MAX_STEPS, MAX_STEPS_HARD_CAP } from "./boot.ts"
 import { maybeSpill } from "./spill.ts"
 import { compactMessages, projectEvents, clipText, estimateTokens, withCompactSummary } from "./context.ts"
 import type { ContextUsage } from "./context.ts"
@@ -61,16 +44,11 @@ export interface TurnOptions extends TurnStopOptions {
   workspace: string
   log: SessionLog
   system?: string
-  maxSteps?: number
   /**
-   * 步数上限当**硬顶**用：到点直接停，不给模型"自己决定要不要继续"的机会。
-   *
-   * 默认（不传）是**软预算**：到 `maxSteps` 只提醒模型自评——要么收尾给结论，
-   * 要么调 `set_max_steps` 申请扩展接着跑；决定权在模型，不甩给用户。
-   * 子代理必须传 true——它是并行跑的、每个都在烧钱，需要一个谁来都改不动的封顶，
-   * 不能变成"第二个主循环"（见 subagent.ts 的 SUBAGENT_MAX_STEPS）。
+   * 上下文压缩时，要不要让模型把被丢掉的轮次归档成结论（TS-042 第二层）。
+   * 默认开。子代理传 false：它生命周期短、几乎撞不到压缩，多一次模型调用是纯亏。
    */
-  hardStepLimit?: boolean
+  archiveDropped?: boolean
   signal?: AbortSignal
   /** 在每个 step 边界拉一次外部注入的消息（agent 的 inbox；中途插话靠它）。 */
   inbox?: () => string[]
@@ -261,31 +239,22 @@ export interface TurnResult {
 }
 
 export async function runTurn(o: TurnOptions): Promise<TurnResult> {
-  let maxSteps = Math.max(1, o.maxSteps ?? DEFAULT_MAX_STEPS)
-  // 硬顶模式（子代理）：到 maxSteps 就停。软预算模式（主任务）：见下面的提醒逻辑。
-  const hardStepLimit = o.hardStepLimit === true
   // 遥测（TS-053）：只记数字与名字，不记 prompt / 参数 / 正文
   const stopTurn = telemetry.time("turn")
 
   /** 循环卫生（TS-024）：只做判定，停不停由下面决定。 */
-  const guard = new LoopGuard({ maxSteps, stepTimeoutMs: o.stepTimeoutMs })
+  const guard = new LoopGuard({ stepTimeoutMs: o.stepTimeoutMs })
 
-  /* 结构化停止条件（TS-066）：**硬顶 + 墙钟 + 无进展**一起判。
-     步数这一项刻意用 `MAX_STEPS_HARD_CAP` 而不是 `maxSteps`：`maxSteps` 现在是
-     "**预算**"——到点只提醒模型自己决定收尾还是 `set_max_steps` 申请扩展，**不硬停**
-     （硬停等于把"继不继续"甩给用户点按钮，那正是要去掉的行为）。
-     硬顶/deadline/stall 都与 `maxSteps` 无关，所以这份条件建好就是常量，
-     `set_max_steps` 只需推后下一次提醒点，不必重建它。 */
+  /* 结构化停止条件（TS-066）：**墙钟 + 无进展**一起判，没有步数这一项——
+     跑多少步由模型自己决定，拿步数卡它就是替它猜答案。
+     这两项都不看本轮的运行时状态，建好就一直用。 */
   const stopWhen =
     o.stopWhen ??
     defaultStopConditions({
-      maxSteps: hardStepLimit ? maxSteps : MAX_STEPS_HARD_CAP,
       deadlineMs: o.deadlineMs,
       stallSteps: o.stallSteps,
     })
 
-  // 软预算的下一次提醒点。默认就在 maxSteps；模型调 set_max_steps 抬高预算后同步推后。
-  let nextBudgetNotice = maxSteps
   const startedAt = Date.now()
   /** 距上一次"有进展"过去了多少步（进展 = 本步至少有一个工具执行成功）。 */
   let stepsSinceProgress = 0
@@ -323,7 +292,7 @@ export async function runTurn(o: TurnOptions): Promise<TurnResult> {
 
   messages.push({ role: "user", content: o.prompt })
 
-  emit({ type: "turn/start", prompt: o.prompt, model: o.cfg.model, workspace: o.workspace, maxSteps })
+  emit({ type: "turn/start", prompt: o.prompt, model: o.cfg.model, workspace: o.workspace })
   emit({ type: "agent/status", status: "running" })
 
   let steps = 0
@@ -352,21 +321,11 @@ export async function runTurn(o: TurnOptions): Promise<TurnResult> {
       note = verdict.note
       break
     }
-    /* 轮次预算到点：**不硬停**，把"要不要继续"的决定权交回模型。
-       它要么收尾给结论（自然结束），要么调 set_max_steps 申请新预算（接着跑）。
-       硬停只留给硬顶/墙钟/无进展——那些是真的该停了。 */
-    if (!hardStepLimit && steps >= nextBudgetNotice && steps < MAX_STEPS_HARD_CAP) {
-      messages.push({ role: "user", content: budgetNotice(maxSteps) })
-      emit({ type: "agent/status", status: "running", note: `步数预算（${maxSteps} 步）已用尽，由模型决定收尾或扩展` })
-      // 模型若无视提醒继续硬跑，下一个预算点再提醒一次；到硬顶由 firstStop 如实收尾。
-      nextBudgetNotice = steps + Math.max(1, maxSteps)
-    }
     steps += 1
     progressedThisStep = false
     telemetry.count("step")
-    // maxSteps 一并落盘：界面要显示"第 N / M 步"，回放时才能重建（TS-066）
-    emit({ type: "step/start", step: steps, maxSteps })
-    emit({ type: "agent/step", step: steps, maxSteps })
+    emit({ type: "step/start", step: steps })
+    emit({ type: "agent/step", step: steps })
 
     /* inbox：外部在 step 边界插进来的话（人中途插一句、子代理回了消息）。
        只在**第 2 步之后**注入——第 1 步前注入等于把目标又说一遍。 */
@@ -386,10 +345,10 @@ export async function runTurn(o: TurnOptions): Promise<TurnResult> {
     let c = compactMessages(messages)
     if ((c.droppedTurns > 0 || c.truncated > 0) && (c.droppedTurns !== lastCompactDropped || c.truncated !== lastCompactTruncated)) {
       telemetry.count("context.compact")
-      /* 归档只给主任务做（`!hardStepLimit`）：子代理是并行跑的、每个都在烧钱，
-         而且生命周期短、几乎撞不到压缩——在这里为每个子代理加一次模型调用，
-         是纯亏。取消中也不做：用户已经不想看了，没必要为一个必然被丢的结果付费。 */
-      if (c.droppedTurns > 0 && !hardStepLimit && !o.signal?.aborted) {
+      /* 归档默认只给主任务做（`archiveDropped !== false`，子代理传 false）：
+         子代理生命周期短、几乎撞不到压缩——为每个子代理加一次模型调用是纯亏。
+         取消中也不做：用户已经不想看了，没必要为一个必然被丢的结果付费。 */
+      if (c.droppedTurns > 0 && o.archiveDropped !== false && !o.signal?.aborted) {
         /* 每轮封顶：上下文吃紧时几乎**每步**都在丢轮次，不封顶就会变成"每步多烧一次
            模型调用"，而且恰好烧在最不该花钱的时刻。封顶后仍退回第一层（照丢不误），
            只是不再替它写归档——前几次归档已经把早期结论保住了，边际收益远低于成本。 */
@@ -604,25 +563,10 @@ export async function runTurn(o: TurnOptions): Promise<TurnResult> {
         })
         o.onTool?.(c.name, args, res, "")
         stopTool()
-        // set_max_steps 是元控制调用，不算任务进展（否则模型卡在循环里反复扩上限也能重置 stalled）
-        if (res.ok && c.name !== "set_max_steps") progressedThisStep = true // 进展 = 真做成了事，不只是"说了一段话"
+        if (res.ok) progressedThisStep = true // 进展 = 真做成了事，不只是"说了一段话"
         if (!res.ok) {
           failedTools += 1
           telemetry.count("tool.failed", 1, { tool: c.name })
-        }
-
-        // 模型主动抬高预算：上限是"预算"不是硬墙，只需把下一次提醒点推到新预算处
-        if (!hardStepLimit && c.name === "set_max_steps" && res.ok) {
-          const requested = Math.floor(Number(args.steps))
-          if (Number.isFinite(requested) && requested >= 1) {
-            const next = Math.min(requested, MAX_STEPS_HARD_CAP)
-            if (next > maxSteps) {
-              maxSteps = next
-              nextBudgetNotice = Math.max(steps, maxSteps)
-              const reason = typeof args.reason === "string" && args.reason.trim() ? args.reason.trim() : "模型申请扩展"
-              emit({ type: "agent/status", status: "running", note: `本轮步数预算已扩展到 ${maxSteps}（${reason}）` })
-            }
-          }
         }
       }
 
@@ -660,6 +604,6 @@ export async function runTurn(o: TurnOptions): Promise<TurnResult> {
   stopTurn()
   emit({ type: "agent/turn-stopping", reason: stopReason, steps, note })
   emit({ type: "agent/status", status: stopReason === "completed" ? "done" : "stopped", note })
-  emit({ type: "turn/end", steps, stop: stopReason, note, text: finalText, failedTools, maxSteps })
+  emit({ type: "turn/end", steps, stop: stopReason, note, text: finalText, failedTools })
   return { text: finalText, steps, stopReason, note, failedTools }
 }

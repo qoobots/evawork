@@ -18,7 +18,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { ipcMain, shell, app } = require('electron');
-const { TsAgent, findNode, DEFAULT_MAX_STEPS } = require('./tsAgentCore');
+const { TsAgent, findNode } = require('./tsAgentCore');
 const iam = require('./iam');
 const providers = require('./providers');
 
@@ -200,8 +200,6 @@ class TsAgentHost {
       entry,
       workspace,
       nodeBin: node.bin, // TS-054：必须是真 Node，不能用 Electron 自己
-      // 用 core 导出的常量，不要在这里再写一份数字（此前是硬编码 12，改的时候漏过）
-      maxSteps: Number(opts.maxSteps || DEFAULT_MAX_STEPS),
       // 令牌只从这里进子进程，主进程不留副本
       env: {
         EVA_AI_BASE_URL: cred.base_url,

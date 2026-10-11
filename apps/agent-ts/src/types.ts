@@ -18,15 +18,17 @@ export type Role = "system" | "user" | "assistant" | "tool"
  * 反过来要 import `guard.ts`——放 loop 里就成了循环依赖。
  *
  * 分类是有代价的，界面据此决定给「继续」还是「重试」：
- *   - **预算/上限类**（max_steps / deadline / timeout / stalled）→ 已产出的内容
+ *   - **预算/上限类**（deadline / timeout / stalled）→ 已产出的内容
  *     都还在上下文里，给「继续」（复用会话续跑），不给「重试」（那暗示从头重来）；
  *   - **真失败类**（error / cancelled）→ 给「重试」。
  *     guard 死循环不再作为 turn 级错误：同一工具同参数第 5 次会被跳过，并把阻塞信息
- *     作为工具结果喂给模型，让它自己换做法；最终停止原因通常是 max_steps / stalled。
+ *     作为工具结果喂给模型，让它自己换做法；最终停止原因通常是 deadline / stalled。
+ *
+ * 没有"步数上限"这一类：跑多少步由模型按任务复杂度自己决定，预算按**时间**和
+ * **有没有进展**收口，而不是按数到第几步。
  */
 export type StopReason =
   | "completed"
-  | "max_steps"
   /** 墙钟预算用尽 */
   | "deadline"
   /** 单个 step 超时（含模型请求挂住） */

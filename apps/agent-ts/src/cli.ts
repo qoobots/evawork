@@ -11,7 +11,7 @@ import os from "node:os"
 import { spawn } from "node:child_process"
 import { llmConfigFromEnv } from "./llm.ts"
 import { SessionLog, homeDir, newSessionId } from "./session.ts"
-import { applyManifest, loadManifest, DEFAULT_MAX_STEPS } from "./boot.ts"
+import { applyManifest, loadManifest } from "./boot.ts"
 import { exportSession, listSessions, searchSessions } from "./query.ts"
 import type { ExportFormat } from "./query.ts"
 import { renderMetrics } from "./telemetry.ts"
@@ -82,7 +82,6 @@ async function main(): Promise<void> {
     const { serve } = await import("./sdk.ts")
     await serve({
       workspace: path.resolve(arg("workspace") || process.cwd()),
-      maxSteps: Number(arg("max-steps", String(DEFAULT_MAX_STEPS))) || DEFAULT_MAX_STEPS,
       model: arg("model") || undefined,
     })
     return
@@ -125,7 +124,6 @@ async function main(): Promise<void> {
         "  --model <id>        模型（**没有默认值**：由启动方注入 EVA_AI_MODEL，即后端裁决的结果）\n" +
         "  --workspace <dir>   工作区根，默认当前目录\n" +
         "  --hardened          加固档：用 Node permission model 锁住本进程写入范围，命令工具禁用\n" +
-        `  --max-steps <n>     轮次上限，默认 ${DEFAULT_MAX_STEPS}\n` +
         "  --boot <file>       启动装配清单（默认 ~/.evawork/ts-agent/boot.json），可关模块/剔工具/改提示词\n" +
         "  --session <id>      复用会话 id（续跑）\n" +
         "  --json              只输出结构化结果\n" +
@@ -145,10 +143,7 @@ async function main(): Promise<void> {
   /* 启动清单（TS-050）：能力组合由一张清单决定。
      优先级：**命令行显式给的 > 清单 > 默认**，否则"改了清单不生效"会让人怀疑清单没被读。 */
   const manifest = loadManifest(arg("boot") || undefined)
-  if (has("max-steps")) manifest.maxSteps = Number(arg("max-steps", String(DEFAULT_MAX_STEPS))) || DEFAULT_MAX_STEPS
   const booted = await applyManifest(manifest)
-
-  const maxSteps = Math.max(1, booted.manifest.maxSteps)
 
   if (permissionEnabled()) {
     // 走 stderr：--serve 模式下 stdout 是协议通道，不能被污染
@@ -171,7 +166,6 @@ async function main(): Promise<void> {
     log,
     systemPrompt: booted.prompt,
     tools: booted.tools,
-    maxSteps,
     signal: controller.signal,
     onText: (s) => { if (!json) process.stdout.write(s) },
     onTool: (name, args, r) => {

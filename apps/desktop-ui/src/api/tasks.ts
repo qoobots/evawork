@@ -144,8 +144,8 @@ export type TaskEvent =
   | { type: 'done'; task: Task }
   // T-073：用户中断——已产出的正文与产物都留在任务上
   | { type: 'cancelled'; task: Task; reason: string }
-  // 达到轮次上限（max_steps）：任务只是被预算截停，已做的产出都还在上下文里——给"继续"而不是"重试"，
-  // 让用户自己决定要不要接着跑（区别于 guard：guard 是真卡死，仍走 error/重试）。
+  // 跑到时间/预算类边界（deadline / timeout / stalled）：任务只是被截停，已做的产出都还在上下文里——
+  // 给"继续"而不是"重试"，让用户自己决定要不要接着跑（区别于 guard：guard 是真卡死，仍走 error/重试）。
   | { type: 'limit'; message: string; stop: string }
   // TS-065：上下文用量（每个 step 更新一次）。**派生值**：不进任务级列表、不落盘，
   // 只喂给输入框下方那条监控——它回答的是"还能塞多少、被什么吃掉的"。

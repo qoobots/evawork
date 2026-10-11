@@ -138,7 +138,6 @@ export interface TsAgentPromptArgs {
   prompt: string;
   workspace?: string;
   model?: string;
-  maxSteps?: number;
 }
 
 export function tsAgentPrompt(args: TsAgentPromptArgs): Promise<{ ok: boolean; reason?: string; sessionId?: string }> {

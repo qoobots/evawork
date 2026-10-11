@@ -12,12 +12,6 @@
 const { spawn, spawnSync } = require('child_process');
 const { EventEmitter } = require('events');
 
-/* 一个 turn 的轮次上限。**必须与 agent-ts 的 `boot.ts#DEFAULT_MAX_STEPS` 同值**——
-   这份是主进程侧（CommonJS，没法 import .ts），子进程侧还另有一份；
-   两边不一致时，子进程会按 `--max-steps` 显式值走，主进程这份形同虚设。
-   12 太紧：真实任务常在第 12 步被截断，用户只能点「继续」再发一轮。 */
-const DEFAULT_MAX_STEPS = 100;
-
 /* TS-054：TS 智能体要**真 Node** 才能跑（原生剥离 TS 类型需要 22.18+）。
    Electron 自带的那份不够：Electron 31 里是 Node 20，而且 `process.execPath`
    直接拿来 spawn 会拉起一个 GUI 窗口——这是"能启动但完全不对"的那类错。
@@ -77,7 +71,6 @@ class TsAgent extends EventEmitter {
    * @param {object} opts
    * @param {string} opts.entry      cli.ts 绝对路径
    * @param {string} opts.workspace  工作区根
-   * @param {number} [opts.maxSteps]
    * @param {string} [opts.nodeBin]  默认 process.execPath
    * @param {object} [opts.env]      额外环境变量（EVA_AI_BASE_URL / EVA_AI_TOKEN 由此注入）
    */
@@ -98,14 +91,7 @@ class TsAgent extends EventEmitter {
   start() {
     if (this.running) return;
     const o = this.opts;
-    const args = [
-      o.entry,
-      '--serve',
-      '--workspace',
-      o.workspace,
-      '--max-steps',
-      String(o.maxSteps || DEFAULT_MAX_STEPS),
-    ];
+    const args = [o.entry, '--serve', '--workspace', o.workspace];
     const childEnv = { ...process.env, ...(o.env || {}) };
     /* TS-055：把 resources 根目录递给子进程。
        agent 是被外部 Node 拉起的**普通进程**，它拿不到 Electron 的 `process.resourcesPath`
@@ -259,4 +245,4 @@ class TsAgent extends EventEmitter {
   }
 }
 
-module.exports = { TsAgent, DEFAULT_MAX_STEPS, findNode, parseVersion, versionOk, NODE_MIN };
+module.exports = { TsAgent, findNode, parseVersion, versionOk, NODE_MIN };

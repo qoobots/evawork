@@ -1029,7 +1029,7 @@ async function openTask(id: string) {
           : t.state === 'cancelled'
             ? 'cancelled'
             : 'done';
-      // 终态只要不是失败，就不要保留历史回放里的"达到轮次上限"提示
+      // 终态只要不是失败，就不要保留历史回放里的"跑到预算边界"提示
       if (!['failed', 'error'].includes(t.state)) {
         hitLimit.value = false;
         errMsg.value = '';
@@ -1495,7 +1495,7 @@ function applyEvent(ev: StreamEvent) {
       stopping.value = false;
       break;
     case 'limit':
-      // 达到轮次上限：已产出的内容如实保留，标记为 error 态但给"继续"（复用会话、新预算接着跑）
+      // 跑到预算边界（时间/无进展）：已产出的内容如实保留，标记为 error 态但给"继续"（复用会话接着跑）
       commitStreamAsAnswer();
       errMsg.value = ev.message;
       hitLimit.value = true;
@@ -1513,7 +1513,7 @@ function retry() {
   void runOnce(runTitle.value, Boolean(taskId.value));
 }
 
-/* 达到轮次上限（max_steps）：后端发来 limit 帧——内容都还在上下文里，给用户"继续"而非"重试"。 */
+/* 跑到时间/预算类边界：后端发来 limit 帧——内容都还在上下文里，给用户"继续"而非"重试"。 */
 const hitLimit = ref(false);
 
 /* TS-065：上下文用量监控。窗口与分类明细都来自 agent-ts（**token 是估算值**），
@@ -1820,9 +1820,9 @@ async function loginAndRun() {
                 {{ account.busy ? '登录中…' : '登录 EVA 账号' }}
               </button>
             </template>
-            <!-- 达到轮次上限：内容都还在上下文里，给用户"继续"而不是从头"重试" -->
+            <!-- 跑到预算边界：内容都还在上下文里，给用户"继续"而不是从头"重试" -->
             <template v-else-if="hitLimit">
-              <p class="run-note">已达轮次上限：已读 / 已写的内容都保留在上下文里。</p>
+              <p class="run-note">本轮被预算截停：已读 / 已写的内容都保留在上下文里。</p>
             </template>
             <template v-else>
               <button class="ap-btn primary" @click="retry">重试</button>

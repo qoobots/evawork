@@ -11,7 +11,6 @@ import { WorkspaceTerminal } from "./terminal.ts"
 import { McpClient, loadMcpConfig, mcpToolName } from "./mcp.ts"
 import type { McpServerConfig } from "./mcp.ts"
 import type { ToolAction, ToolContext, ToolDef, ToolParam, ToolResult } from "./types.ts"
-import { MAX_STEPS_HARD_CAP } from "./budget.ts"
 
 const registry = new Map<string, ToolDef>()
 
@@ -129,26 +128,6 @@ const MAX_OUTPUT = 20_000
 /** 输出截断：工具返回过长时只保留前 N 字符，避免撑爆上下文。 */
 export const truncate = (s: string, n = MAX_OUTPUT): string =>
   s.length > n ? `${s.slice(0, n)}\n…（已截断，共 ${s.length} 字符）` : s
-
-defineTool({
-  name: "set_max_steps",
-  description: "调整本轮 turn 的剩余步数上限。简单任务保持默认值即可；若判断任务确实复杂、需要更多步数，可主动申请扩展。",
-  parameters: [
-    { name: "steps", type: "number", required: true, desc: `目标步数上限（1-${MAX_STEPS_HARD_CAP}）` },
-    { name: "reason", type: "string", required: false, desc: "申请理由，会显示给用户" },
-  ],
-  action: "llm",
-  execute(args): ToolResult {
-    const steps = Number(args.steps)
-    if (!Number.isFinite(steps) || steps < 1) {
-      return { ok: false, error: "步数必须是正整数" }
-    }
-    if (steps > MAX_STEPS_HARD_CAP) {
-      return { ok: false, error: `步数不能超过硬顶 ${MAX_STEPS_HARD_CAP}，如需更高上限请分轮次处理` }
-    }
-    return { ok: true, output: `已将本轮步数上限申请调整为 ${Math.floor(steps)} 步` }
-  },
-})
 
 /** 跑一条 shell 命令（普通子进程）。 */
 async function runCommand(cmd: string, cwd: string, timeoutMs: number, signal?: AbortSignal): Promise<ToolResult> {

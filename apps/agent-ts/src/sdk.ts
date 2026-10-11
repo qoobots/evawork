@@ -47,7 +47,6 @@ interface Session {
 
 export interface ServeOptions {
   workspace: string
-  maxSteps: number
   model?: string
 }
 
@@ -112,7 +111,6 @@ export async function serve(opts: ServeOptions): Promise<void> {
         log: s.log,
         systemPrompt: booted.prompt,
         tools: booted.tools,
-        maxSteps: opts.maxSteps,
         signal: s.controller.signal,
         onEvent: (e: SessionEvent) => notify("session.event", { sessionId: s.id, event: e }),
         /* 流式正文**不落事件日志**：一条一个 token，落盘会把日志撑爆，

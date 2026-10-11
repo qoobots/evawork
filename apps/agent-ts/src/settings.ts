@@ -14,7 +14,6 @@ const KEY = "settings"
 export interface Settings {
   model?: string
   workspace?: string
-  maxSteps?: number
 }
 
 export function loadSettings(): Settings {

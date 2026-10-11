@@ -78,9 +78,6 @@ export const defaultSections: PromptSection[] = [
         c.tools.includes("terminal")
           ? "terminal 的当前目录会跨命令保持；run_command 每条都重置回工作区根。"
           : null,
-        c.tools.includes("set_max_steps")
-          ? "默认轮次上限较低；若判断任务确实复杂、需要更多步数，可调用 set_max_steps 申请扩展。"
-          : null,
         "工具返回失败时先读错误原因再决定下一步，盲目重试只会重复失败。", 
       ]),
   },

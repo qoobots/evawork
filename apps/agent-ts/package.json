@@ -1,0 +1,29 @@
+{
+  "name": "@eva/agent-ts",
+  "version": "0.1.0",
+  "description": "EVA 的 TypeScript 智能体运行时（与 Python 版 evawork 并存的第二套独立智能体）",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "bin": {
+    "eva-agent-ts": "./src/cli.ts"
+  },
+  "scripts": {
+    "start": "node src/cli.ts",
+    "smoke": "node src/cli.ts --prompt \"用 run_command 看一下当前工作区，只回答你看到了什么\"",
+    "build:native": "node scripts/build-native.mjs",
+    "build:native:force": "node scripts/build-native.mjs --force"
+  },
+  "//": "2026-10-06 起允许引入 npm 依赖（原「零 npm 依赖」约束作废，见 .docs/09）。选包偏好纯 JS / 无原生编译，避免打包复杂化。Node 22.18+ 原生剥离 TS 类型即可直接运行 .ts；HTTP 用内置 fetch，流式用手写 SSE 解析。",
+  "dependencies": {
+    "@pdf-lib/fontkit": "^1.1.1",
+    "docx": "^9.8.1",
+    "isomorphic-git": "^1.43.1",
+    "jszip": "^3.10.2",
+    "pdf-lib": "^1.17.1",
+    "pptxgenjs": "^4.0.1",
+    "xlsx": "^0.18.5"
+  }
+}
