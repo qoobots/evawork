@@ -1,0 +1,129 @@
+{
+  "name": "@evawork/desktop-node",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Electron 外壳：加载 Vue 渲染层，拉起 Python 智能体后端",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "bundle:python": "python ../../scripts/bundle_python.py",
+    "build:agent-native": "node ../agent-ts/scripts/build-native.mjs",
+    "pack": "node ../../scripts/materialize_deps.mjs ../agent-ts/node_modules .agent-deps/node_modules && node ../../scripts/materialize_deps.mjs ../mcp-bundle/node_modules .mcp-bundle/node_modules && python ../../scripts/bundle_python.py && electron-builder --dir",
+    "dist": "node ../../scripts/materialize_deps.mjs ../agent-ts/node_modules .agent-deps/node_modules && node ../../scripts/materialize_deps.mjs ../mcp-bundle/node_modules .mcp-bundle/node_modules && python ../../scripts/bundle_python.py && electron-builder --win nsis portable",
+    "pack:dir": "node ../../scripts/materialize_deps.mjs ../agent-ts/node_modules .agent-deps/node_modules && node ../../scripts/materialize_deps.mjs ../mcp-bundle/node_modules .mcp-bundle/node_modules && electron-builder --dir"
+  },
+  "dependencies": {
+    "electron-screenshots": "^0.6.2",
+    "electron-updater": "^6.3.4"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.evawork.desktop",
+    "productName": "EvaWork",
+    "copyright": "Copyright © 2026 EvaWork",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "**/node_modules/node-screenshots/**/*.node",
+      "**/node_modules/node-screenshots-*/**/*.node"
+    ],
+    "extraResources": [
+      {
+        "from": "../desktop-ui/dist",
+        "to": "ui"
+      },
+      {
+        "from": "resources/skills",
+        "to": "skills"
+      },
+      {
+        "from": "../agent-ts",
+        "to": "agent-ts",
+        "filter": [
+          "src/**/*",
+          "package.json",
+          "README.md",
+          "scripts/**/*",
+          "native/win-sandbox/binding.gyp",
+          "native/win-sandbox/src/**/*",
+          "native/win-sandbox/build/Release/*.node",
+          "!node_modules/**/.bin/**",
+          "!node_modules/**/*.map",
+          "!node_modules/**/test/**",
+          "!node_modules/**/tests/**",
+          "!node_modules/**/__tests__/**",
+          "!**/.eva-spill/**",
+          "!**/build/obj/**",
+          "!**/*.pdb",
+          "!**/*.ilk",
+          "!**/*.exp",
+          "!**/*.lib",
+          "!**/*.tlog"
+        ]
+      },
+      {
+        "from": ".agent-deps/node_modules",
+        "to": "agent-ts/node_modules",
+        "filter": [
+          "**/*",
+          "!**/.bin/**",
+          "!**/*.map",
+          "!**/test/**",
+          "!**/tests/**",
+          "!**/__tests__/**"
+        ]
+      },
+      {
+        "from": ".mcp-bundle/node_modules",
+        "to": "mcp-bundle/node_modules",
+        "filter": [
+          "**/*",
+          "!**/.bin/**",
+          "!**/*.map",
+          "!**/test/**",
+          "!**/tests/**",
+          "!**/__tests__/**"
+        ]
+      },
+      {
+        "from": "../../shared/agent-contract.json",
+        "to": "agent-ts/contract/agent-contract.json"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": "x64"
+        },
+        {
+          "target": "portable",
+          "arch": "x64"
+        }
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "qoobots",
+        "repo": "eva"
+      }
+    ]
+  }
+}

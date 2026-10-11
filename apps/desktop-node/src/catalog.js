@@ -171,11 +171,29 @@ function meta() {
    否则界面列出来的技能跟内核能 load 到的不是同一批——那才是最难查的一类 bug。
    只列"真在磁盘上"的技能，不按市场清单编。 */
 
+/**
+ * 随应用分发的内置技能目录（装机就有，不再依赖用户机器上恰好有一份）。
+ *
+ * 布局与 MCP bundle 同理：开发态在 `apps/desktop-node/resources/skills`，
+ * 打包态在 `resources/skills`。可用 EVA_SKILL_BUNDLE 显式指定（调试用）。
+ */
+function bundledSkillDir() {
+  const explicit = String(process.env.EVA_SKILL_BUNDLE || '').trim();
+  if (explicit && fs.existsSync(explicit)) return explicit;
+  if (process.resourcesPath) {
+    const p = path.join(process.resourcesPath, 'skills');
+    if (fs.existsSync(p)) return p;
+  }
+  return path.resolve(__dirname, '..', 'resources', 'skills');
+}
+
 function skillDirs(workspace) {
   const env = String(process.env.EVAWORK_SKILL_DIR || '').trim();
   const userDir = env || path.join(os.homedir(), '.evawork', 'skills');
   const ws = path.resolve(String(workspace || ''));
-  const list = [userDir, path.join(ws, '.evawork', 'skills'), path.join(ws, '.eva-skills'), path.join(ws, 'skills')];
+  /* 顺序即优先级：用户级 → 项目级 → 随包内置。
+     内置放最后：用户在同名技能上做的覆盖/改写必须赢，内置只当兜底。 */
+  const list = [userDir, path.join(ws, '.evawork', 'skills'), path.join(ws, '.eva-skills'), path.join(ws, 'skills'), bundledSkillDir()];
   return list.filter((p) => {
     try {
       return fs.statSync(p).isDirectory();
