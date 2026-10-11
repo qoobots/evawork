@@ -1061,6 +1061,10 @@ async function openTsSession(id: string) {
   taskId.value = id;
   phase.value = 'streaming';
   replaying.value = true;
+  // resetRun() 不清 curUser（实时区还要用它显示当前提问）。回放必须从零开始：
+  // 残留的上一会话/上一视图的 curUser 会让下面"首轮之前的未提交内容"兜底误触发，
+  // 把一个空轮沉进历史——用户看到的就是"一轮对话重开后变两轮"（实测：你好 → 两轮）。
+  curUser.value = '';
   const rebuilt: Turn[] = [];
   try {
     for await (const ev of replayTsTask(tsSessionOf(id))) {
