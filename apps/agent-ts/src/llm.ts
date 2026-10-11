@@ -9,6 +9,7 @@
 
 import type { LlmConfig, Message, StreamChunk, ToolCall } from "./types.ts"
 import { egressFetch } from "./egress.ts"
+import { aliveFallbacks } from "./modelcatalog.ts"
 import { telemetry } from "./telemetry.ts"
 import fs from "node:fs"
 import path from "node:path"
@@ -362,10 +363,16 @@ export async function* streamChat(
 } // ← 关闭 streamChat
 
 /**
- * 本次请求的候选模型链：首选 + 备用（去重、丢掉 `auto` 这类**未裁决**的占位）。
+ * 本次请求的候选模型链：首选 + 备用 + 套餐内兜底（去重、丢掉 `auto` 这类**未裁决**的占位）。
  *
  * `auto` 不是一个模型名，是"请你替我挑"的占位；把它发给接口，就是拿一个它不认识的
  * 名字去请求。裁决只该发生一次，且在后端——所以这里的职责只是把裁决结果排好队。
+ *
+ * **兜底为什么挂在这里**：eva-ai 切到包月套餐后，按量档（kimi-k3 / qwen-max …）
+ * 从通道里下架了，而它们的名字可能还留在用户选过的设置里。那种名字发过去必然
+ * `503 模型通道未配置`，整轮任务就败在一个用户选不回来的模型上。挂上同套餐的
+ * 备选，请求阶段失败时顺着退（只在**一个字都还没吐出去**时换，已有逻辑保证）。
+ * `custom:` 是自带通道，EVA 的备选跟它没关系，不能往它的链上挂。
  */
 export function modelChain(cfg: LlmConfig): string[] {
   const out: string[] = []
@@ -373,6 +380,9 @@ export function modelChain(cfg: LlmConfig): string[] {
     const v = (m || "").trim()
     if (!v || v === "auto" || out.includes(v)) continue
     out.push(v)
+  }
+  if (!out.some((m) => m.startsWith("custom:"))) {
+    for (const m of aliveFallbacks()) if (!out.includes(m)) out.push(m)
   }
   return out
 }

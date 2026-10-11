@@ -295,9 +295,11 @@ export async function serve(opts: ServeOptions): Promise<void> {
         } catch (e) {
           return fail(-32004, `没有模型凭据：${String((e as Error).message)}`)
         }
+        /* 拿到的已经是**当前套餐调得动**的那批（广场 344 条里的套餐外模型
+           ——按量档与视频/3D 模型——已在 modelcatalog 里剔掉）。 */
         const cat = await fetchModelCatalog(cfg, { force: Boolean(p.force) })
-        /* 界面上只给**精选**的那 20 个：平台 llm/multimodal 有 344 条，
-           绝大多数是视频/3D 模型、重复写法与日期快照，下拉没法翻。
+        /* 界面上只给**精选**的那 20 个：套餐内模型不多时就是全部，
+           模型多起来（平台往套餐里加）也能保证下拉翻得动。
            `allModels` 带上总数，让界面能说明"从多少条里挑的"。 */
         const featured = pickFeatured(cat.models, Number(p.limit) || 20)
         return isReq

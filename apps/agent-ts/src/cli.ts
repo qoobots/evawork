@@ -1,6 +1,6 @@
 // CLI 入口：跑一个 turn。
 //
-//   node src/cli.ts --prompt "…" [--model qwen-plus] [--policy ask] [--interactive]
+//   node src/cli.ts --prompt "…" [--model qwen3.7-plus] [--policy ask] [--interactive]
 //
 // 零依赖：不装 tsx，Node 22.18+ 直接跑 .ts（原生剥离类型）。
 // 凭据走环境变量（EVA_AI_BASE_URL / EVA_AI_TOKEN），由启动方注入——
