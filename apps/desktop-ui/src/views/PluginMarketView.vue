@@ -6,6 +6,7 @@ import { pluginCats, pluginFeatureCards, plugins, skillCats, skills } from '@/da
 import { bridgeAvailable } from '@/api/backend';
 import {
   fetchCatalogMeta,
+  reloadCatalog,
   fetchPlugins,
   fetchSkills,
   importSkill,
@@ -83,6 +84,8 @@ const refreshingCatalog = ref(false);
 async function doRefreshCatalog() {
   refreshingCatalog.value = true;
   try {
+    // 先清主进程内存缓存，否则重读的还是旧 catalog.json
+    if (online.value) await reloadCatalog().catch(() => {});
     await runMeta();
     await reloadPlugins();
     await reloadSkills();

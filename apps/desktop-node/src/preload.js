@@ -77,6 +77,7 @@ contextBridge.exposeInMainWorld('evawork', {
   /** 目录（插件/技能/模板：静态数据）+ 模板收藏（本机）。 */
   catalogMeta: () => ipcRenderer.invoke('evawork:catalog-meta'),
   catalogItems: (a) => ipcRenderer.invoke('evawork:catalog-items', a),
+  catalogReload: () => ipcRenderer.invoke('evawork:catalog-reload'),
   templatesMeta: () => ipcRenderer.invoke('evawork:templates-meta'),
   templatesList: (a) => ipcRenderer.invoke('evawork:templates-list', a),
   templateGet: (a) => ipcRenderer.invoke('evawork:template-get', a),

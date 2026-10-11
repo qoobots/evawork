@@ -1,0 +1,252 @@
+{
+  "pluginCats": [
+    "全部",
+    "开发工具",
+    "效率提升",
+    "推荐"
+  ],
+  "plugins": [
+    {
+      "name": "Memory",
+      "desc": "官方 MCP 服务器：基于知识图谱的长期记忆，跨会话保留实体与关系",
+      "icon": "chart",
+      "color": "#e3ecfd",
+      "cats": [
+        "效率提升"
+      ],
+      "capabilities": [
+        "fs_write"
+      ],
+      "egress_policy": [],
+      "version": "latest",
+      "agent_protocol": "1.0",
+      "publisher": "Anthropic 官方",
+      "verified": true,
+      "spec": "@modelcontextprotocol/server-memory",
+      "install_kind": "npm",
+      "tools_hint": "安装后自动握手并列出真实工具"
+    },
+    {
+      "name": "Sequential Thinking",
+      "desc": "官方 MCP 服务器：结构化逐步推理，把复杂问题拆成可审阅的思考步骤",
+      "icon": "sparkle",
+      "color": "#e8e3fb",
+      "cats": [
+        "效率提升"
+      ],
+      "capabilities": [],
+      "egress_policy": [],
+      "version": "latest",
+      "agent_protocol": "1.0",
+      "publisher": "Anthropic 官方",
+      "verified": true,
+      "spec": "@modelcontextprotocol/server-sequential-thinking",
+      "install_kind": "npm",
+      "tools_hint": "安装后自动握手并列出真实工具"
+    },
+    {
+      "name": "Playwright",
+      "desc": "微软官方：驱动真实浏览器做导航/点击/截图/表单，端到端验证 Web 应用",
+      "icon": "code",
+      "color": "#dff3ec",
+      "cats": [
+        "开发工具"
+      ],
+      "capabilities": [
+        "command",
+        "network"
+      ],
+      "egress_policy": [],
+      "version": "latest",
+      "agent_protocol": "1.0",
+      "publisher": "Microsoft 官方",
+      "verified": true,
+      "spec": "@playwright/mcp",
+      "install_kind": "npm",
+      "tools_hint": "安装后自动握手并列出真实工具"
+    },
+    {
+      "name": "Chrome DevTools",
+      "desc": "Chrome DevTools 官方 MCP：性能追踪、内存与网络诊断、抓控制台错误",
+      "icon": "chart",
+      "color": "#fdeeda",
+      "cats": [
+        "开发工具"
+      ],
+      "capabilities": [
+        "command",
+        "network"
+      ],
+      "egress_policy": [],
+      "version": "latest",
+      "agent_protocol": "1.0",
+      "publisher": "Google 官方",
+      "verified": true,
+      "spec": "chrome-devtools-mcp",
+      "install_kind": "npm",
+      "tools_hint": "安装后自动握手并列出真实工具"
+    },
+    {
+      "name": "Context7",
+      "desc": "Upstash 官方：按版本拉取最新库文档，减少用过时 API 写代码的问题",
+      "icon": "book",
+      "color": "#dcedf9",
+      "cats": [
+        "开发工具"
+      ],
+      "capabilities": [
+        "network"
+      ],
+      "egress_policy": [],
+      "version": "latest",
+      "agent_protocol": "1.0",
+      "publisher": "Upstash 官方",
+      "verified": true,
+      "spec": "@upstash/context7-mcp",
+      "install_kind": "npm",
+      "tools_hint": "安装后自动握手并列出真实工具"
+    },
+    {
+      "name": "Filesystem",
+      "desc": "官方 MCP 服务器：在工作区读写/编辑文件、按模式检索目录树，补足本地文件编辑能力（必须指定允许目录）",
+      "icon": "folder",
+      "color": "#e6efe6",
+      "cats": [
+        "开发工具"
+      ],
+      "capabilities": [
+        "fs_write"
+      ],
+      "egress_policy": [],
+      "version": "latest",
+      "agent_protocol": "1.0",
+      "publisher": "Anthropic 官方",
+      "verified": true,
+      "spec": "@modelcontextprotocol/server-filesystem",
+      "install_kind": "npm",
+      "needs_args": true,
+      "setup_hint": "该服务必须至少给一个允许目录，否则会因“No allowed directories”启动即退。请在「启动参数」里填要放开的工作区绝对路径，多个用空格分隔，例如 D:\\05workspaces。",
+      "tools_hint": "安装后自动握手并列出 read_file / write_file / edit_file / search_files 等 14 个文件工具"
+    },
+    {
+      "name": "Everything (参考)",
+      "desc": "官方参考服务器：覆盖 MCP 协议全部特性（tools/prompts/resources/tasks），用于自检与联调",
+      "icon": "box",
+      "color": "#efe9ff",
+      "cats": [
+        "开发工具"
+      ],
+      "capabilities": [],
+      "egress_policy": [],
+      "version": "latest",
+      "agent_protocol": "1.0",
+      "publisher": "Anthropic 官方",
+      "verified": true,
+      "spec": "@modelcontextprotocol/server-everything",
+      "install_kind": "npm",
+      "tools_hint": "安装后自动握手并列出真实工具"
+    }
+  ],
+  "skillCats": [
+    "全部"
+  ],
+  "skills": [],
+  "templateCats": [
+    "全部",
+    "内容创作",
+    "数据分析",
+    "投资与金融",
+    "模板与图表",
+    "办公协同",
+    "产品开发",
+    "战略与研究",
+    "法务与合规",
+    "学习与教育"
+  ],
+  "templates": [
+    {
+      "title": "连锁健身运营营收看板",
+      "hue": "#3d6b4f",
+      "deco": "bars",
+      "cat": "数据分析",
+      "desc": "汇总门店营收、会员与课程数据，输出可视化看板与经营建议"
+    },
+    {
+      "title": "抽量工厂产能监管看板",
+      "hue": "#7a5c3e",
+      "deco": "radar",
+      "cat": "数据分析",
+      "desc": "监控产线产能、良率与停机，输出产能监管看板"
+    },
+    {
+      "title": "运营数据分析报告",
+      "hue": "#1f2a44",
+      "deco": "chart",
+      "cat": "数据分析",
+      "desc": "整理运营核心指标，输出结构化数据分析报告"
+    },
+    {
+      "title": "大消费行业专精精新品质报告",
+      "hue": "#22252b",
+      "deco": "site",
+      "cat": "投资与金融",
+      "desc": "梳理大消费行业趋势与标的，输出品质研究报告"
+    },
+    {
+      "title": "区域医美连锁经营数据看板",
+      "hue": "#2f6e4f",
+      "deco": "kpi",
+      "cat": "数据分析",
+      "desc": "聚合区域门店经营数据，输出医美连锁经营看板"
+    },
+    {
+      "title": "康复护理服务方案",
+      "hue": "#c9705e",
+      "deco": "photo",
+      "cat": "学习与教育",
+      "desc": "围绕康复护理场景，输出服务方案与流程建议"
+    },
+    {
+      "title": "门店选址策略分析报告",
+      "hue": "#31435c",
+      "deco": "chart",
+      "cat": "战略与研究",
+      "desc": "结合客流与竞品，输出门店选址策略分析"
+    },
+    {
+      "title": "外卖会员体验对比报告",
+      "hue": "#8a4d3b",
+      "deco": "site",
+      "cat": "战略与研究",
+      "desc": "对比外卖平台会员体系与体验，输出对比报告"
+    },
+    {
+      "title": "新能源汽车品牌季度经营复盘",
+      "hue": "#243b55",
+      "deco": "kpi",
+      "cat": "投资与金融",
+      "desc": "复盘季度销量、营销与口碑，输出经营复盘"
+    },
+    {
+      "title": "年度营销预算规划表",
+      "hue": "#4a5a3d",
+      "deco": "bars",
+      "cat": "内容创作",
+      "desc": "拆解年度营销目标，输出预算规划与分配表"
+    },
+    {
+      "title": "增长实验周报模板",
+      "hue": "#54427e",
+      "deco": "chart",
+      "cat": "办公协同",
+      "desc": "汇总增长实验结果，输出周报与下一步假设"
+    },
+    {
+      "title": "用户访谈纪要整理模板",
+      "hue": "#37474f",
+      "deco": "doc",
+      "cat": "学习与教育",
+      "desc": "整理用户访谈录音要点，输出结构化纪要"
+    }
+  ]
+}

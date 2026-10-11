@@ -284,6 +284,7 @@ function setupCatalogIpc() {
   };
   ipcMain.handle('evawork:catalog-meta', () => catalog.meta());
   ipcMain.handle('evawork:catalog-items', guard((a) => catalog.items(a)));
+  ipcMain.handle('evawork:catalog-reload', () => catalog.reload());
   ipcMain.handle('evawork:templates-meta', () => catalog.templateMeta());
   ipcMain.handle('evawork:templates-list', guard((a) => catalog.templates(a)));
   ipcMain.handle('evawork:template-get', guard((a) => catalog.template(String(a.title || ''))));
