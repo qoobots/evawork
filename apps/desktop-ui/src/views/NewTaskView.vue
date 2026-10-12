@@ -433,6 +433,18 @@ const runTitle = ref('');
 const steps = ref<Step[]>([]);
 const output = ref('');
 const artifacts = ref<Artifact[]>([]);
+
+/* 正文末尾「复制全文」：把最终答案写进剪贴板，成功后图标短暂变成对勾 */
+const copied = ref(false);
+let copiedTimer: ReturnType<typeof setTimeout> | undefined;
+async function copyOutput(text: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+    copied.value = true;
+    clearTimeout(copiedTimer);
+    copiedTimer = setTimeout(() => { copied.value = false; }, 1500);
+  } catch { /* 剪贴板不可用（无权限等）时静默失败，不打断阅读 */ }
+}
 const errMsg = ref('');
 const taskId = ref('');
 /** 侧栏条目的临时 id：createTask 拿到真实任务 id 后替换，点侧栏才能回显。 */
@@ -1666,6 +1678,11 @@ async function loginAndRun() {
             </template>
           </div>
           <MarkdownView v-if="t.output" class="ai-out" :source="t.output" :breaks="true" />
+          <div v-if="t.output" class="ai-acts">
+            <button class="ai-act" :class="{ ok: copied }" :title="copied ? '已复制' : '复制全文'" @click="copyOutput(t.output)">
+              <UIcon :name="copied ? 'check' : 'copy'" :size="13" />
+            </button>
+          </div>
           <div v-if="t.artifacts.length" class="run-arts">
             <div class="ra-t">产物（{{ t.artifacts.length }}）</div>
             <div v-for="a in t.artifacts" :key="a.id" class="ra-item">
@@ -1773,6 +1790,13 @@ async function loginAndRun() {
                正文只承载最终答案与当前正在流出的片段——过程叙述都在上面的执行过程里。 -->
           <MarkdownView v-if="busy && streamBuf" class="ai-out" :source="streamBuf" :streaming="true" :breaks="true" />
           <MarkdownView v-else-if="output" class="ai-out" :source="output" :streaming="false" :breaks="true" />
+
+          <!-- 复制全文：跑完后才出现（流式期间复制半截答案没意义），悬停消息才浮现 -->
+          <div v-if="!busy && output" class="ai-acts">
+            <button class="ai-act" :class="{ ok: copied }" :title="copied ? '已复制' : '复制全文'" @click="copyOutput(output)">
+              <UIcon :name="copied ? 'check' : 'copy'" :size="13" />
+            </button>
+          </div>
 
           <!-- 产物（可回写到「我的文件」，T-035；点击文件名预览，可再用系统程序打开） -->
           <div v-if="artifacts.length" class="run-arts">
@@ -2505,6 +2529,17 @@ async function loginAndRun() {
    容器保留换行会把 HTML 源码里块级标签之间的换行符一起渲染成真换行（每个块后面多一个空行 = 双倍行距）。
    正文的分行语义交给 MarkdownView（`:breaks="true"` → `<br>`），行高也由 `.md` 统一持有。 */
 .ai-out { margin: 12px 0 0; font-family: inherit; font-size: 13.5px; word-break: break-word; }
+
+/* 正文末尾的「复制全文」小按钮：默认藏起来（同 .mi-acts 的 visibility 做法，
+   悬停整条消息才浮现），成功复制后短暂变绿色对勾。 */
+.ai-acts { display: flex; justify-content: flex-end; margin-top: 4px; visibility: hidden; }
+.msg-ai:hover .ai-acts { visibility: visible; }
+.ai-act {
+  display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px;
+  padding: 0; border: none; border-radius: 6px; background: transparent; color: var(--t3); cursor: pointer;
+}
+.ai-act:hover { background: var(--line-2); color: var(--t1); }
+.ai-act.ok { color: var(--ok); }
 
 /* T-090：子代理轨迹——派出去的活干了什么，人得看得见（模型手里只有摘要） */
 .sub-trace { margin: 8px 0 2px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--line-2); }
