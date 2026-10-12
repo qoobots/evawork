@@ -1,6 +1,6 @@
 ---
 name: executing-plans
-description: 在当前会话里逐任务执行一份计划
+description: 已有一份批准的实现计划、需要在当前会话逐任务执行时
 category: 流程与编排
 source: obra/superpowers（中文改编）
 ---

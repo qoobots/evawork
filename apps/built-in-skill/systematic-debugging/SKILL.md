@@ -1,6 +1,6 @@
 ---
 name: systematic-debugging
-description: 遇到 bug 时先找根因再改
+description: 遇到异常、报错、结果不对或性能骤降、需要先找根因再改时
 category: 工程实践
 source: obra/superpowers（中文改编）
 ---

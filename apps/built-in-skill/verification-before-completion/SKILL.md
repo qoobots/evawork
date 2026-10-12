@@ -1,6 +1,6 @@
 ---
 name: verification-before-completion
-description: 宣布做完了之前先拿验证证据
+description: 在宣布完成、提交或开 PR 之前，需要先拿验证证据时
 category: 工程实践
 source: obra/superpowers（中文改编）
 ---

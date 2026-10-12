@@ -1,6 +1,6 @@
 ---
 name: test-driven-development
-description: 实现功能或修 bug 前先写测试、看着它失败
+description: 实现功能或修 bug、且仓库已有测试体系、需要先写会失败的测试时
 category: 工程实践
 source: obra/superpowers（中文改编）
 ---

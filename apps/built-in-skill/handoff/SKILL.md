@@ -1,6 +1,6 @@
 ---
 name: handoff
-description: 把当前对话压缩成交接文档给下一个会话
+description: 需要把当前对话压缩成交接文档、交给下一个会话时
 category: 办公与协作
 source: mattpocock/skills（中文改编）
 argument-hint: "What will the next session be used for?"

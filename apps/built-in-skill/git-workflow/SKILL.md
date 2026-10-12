@@ -1,6 +1,6 @@
 ---
 name: git-workflow
-description: 处理分支、提交、写提交信息、开分支
+description: 需要处理分支、提交、写提交信息或开 PR 等 git 操作时
 category: 工程实践
 source: EvaWork 自撰
 

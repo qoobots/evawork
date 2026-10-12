@@ -1,6 +1,6 @@
 ---
 name: brainstorming
-description: 动手做之前把需求问清、方案定下来
+description: 动手实现前需要澄清需求、确定方案时
 category: 流程与编排
 source: obra/superpowers（中文改编）
 ---

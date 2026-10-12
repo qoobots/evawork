@@ -1,6 +1,6 @@
 ---
 name: doc-coauthoring
-description: 写文档、提案、技术规格、决策记录
+description: 需要写文档、提案、技术规格或决策记录时
 category: 文档与写作
 source: EvaWork 自撰
 

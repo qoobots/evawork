@@ -1,6 +1,6 @@
 ---
 name: writing-plans
-description: 动手实现之前写实现计划
+description: 方案确定后、动手实现前需要写逐任务实现计划时
 category: 流程与编排
 source: obra/superpowers（中文改编）
 ---

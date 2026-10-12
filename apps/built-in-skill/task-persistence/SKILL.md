@@ -1,6 +1,6 @@
 ---
 name: task-persistence
-description: 任务没解决就不停手，也不许瞎编或假装完成
+description: 任务卡住或不确定、需要坚持推进、不瞎编、不假装完成时
 category: 工程实践
 source: EvaWork 自撰（依据 codex Autonomy/Persistence 与 DSH goal 生命周期收敛）
 ---

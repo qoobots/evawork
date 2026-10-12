@@ -1,6 +1,6 @@
 ---
 name: using-superpowers
-description: 开工前判断该用哪些技能、按什么顺序
+description: 模型开工前需要判断该调用哪些技能、按什么顺序时
 category: 流程与编排
 source: obra/superpowers（中文改编）
 ---
