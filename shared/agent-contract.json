@@ -1,0 +1,37 @@
+{
+  "version": 2,
+  "_doc": "TS 智能体（apps/agent-ts）的唯一契约：动作风险分类 + 审批档位语义。改这里，运行时的审批行为跟着变。分类不在各处另写一份——由 src/contract.ts 加载，缺文件会静默退化到内置兜底（审批按错的风险表跑，且看不出来）。",
+  "_naming": "类别用抽象名（write / command / ...）。工具注册时声明自己属于哪个类别，别名用于把历史工具名归一到抽象名。",
+  "actions": {
+    "read": { "risky": false, "note": "只读，直接放行" },
+    "llm": { "risky": false, "note": "再问一次模型 / 只读检索，不改外部世界" },
+    "memory_write": { "risky": false, "note": "写的是 agent 自己的状态（应用数据区），不碰用户工作区" },
+    "write": { "risky": true, "note": "写文件 / 改内容" },
+    "command": { "risky": true, "alias": ["run_command", "terminal"], "note": "执行命令" },
+    "network": { "risky": true, "note": "联网访问" },
+    "install": { "risky": true, "note": "安装依赖" },
+    "computer_control": { "risky": true, "note": "控制鼠标/键盘/窗口" }
+  },
+  "policies": {
+    "never": {
+      "on_risky": "deny",
+      "fail_closed": true,
+      "note": "无人值守的默认档：高危动作直接拒绝，不等人"
+    },
+    "ask": {
+      "on_risky": "ask",
+      "fail_closed": true,
+      "note": "有人应答才问；无人应答 = deny（绝不一挂了之）"
+    },
+    "plan": {
+      "on_risky": "deny",
+      "fail_closed": true,
+      "note": "只规划不改文件（对齐 Claude Code 的 plan mode）：写文件、跑命令、联网、装包、电脑控制一律**拒绝而不是问**——用户选了这一档就是想先看方案。读文件与写计划/待办放行（它们本来就不是高风险动作）。批准方案后切回其它档再动手"
+    },
+    "full": {
+      "on_risky": "allow",
+      "fail_closed": false,
+      "note": "全部放行。慎用：没有任何东西在看这一步写到哪去了"
+    }
+  }
+}
