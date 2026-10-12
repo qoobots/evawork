@@ -7,11 +7,11 @@ source: EvaWork 自撰（依据 DSH fs-observation-policy 与 codex prompt 收�
 
 # 代码库探索纪律
 
-## 用 shell 命令（run_command / terminal），不靠肉眼翻
+## 工具优先，shell 兜底，不靠肉眼翻
 
-EvaWork 没有专门的文件工具，文件读写、列目录、搜内容、找文件、打补丁、删文件统一通过 `run_command` / `terminal` 发 shell 命令完成。
+EvaWork 没有**内置**文件工具，但会接入大量 MCP 服务器（文件系统、搜索/检索、git 等），以工具形式为文件读写、列目录、搜内容、找文件、打补丁、删文件提供能力。规则：**优先调用当前会话已接入的 MCP 工具**；MCP 覆盖不到的，再用 `run_command` / `terminal` 发 shell 命令兜底。
 
-| 要做的事 | 用 `run_command` / `terminal` 跑（Windows） | 别 |
+| 要做的事 | MCP 没覆盖时，用 `run_command` / `terminal` 跑（Windows） | 别 |
 |---|---|---|
 | 看文件内容 | `type` 文件；PowerShell 用 `Get-Content`/`gc`（大文件 `gc -TotalCount 50`） | 在界面里裸手翻 |
 | 找文件（按名字） | `dir /s /b 文件名` | 凭记忆猜路径 |
