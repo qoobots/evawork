@@ -7,27 +7,45 @@
 
 import fs from "node:fs"
 import path from "node:path"
+import { fileURLToPath } from "node:url"
+
+/**
+ * 本文件所在目录。ESM（"type": "module"）下没有 `__dirname`，只能从 import.meta 反推——
+ * 直接写 __dirname 会抛 `ReferenceError: __dirname is not defined`，会话直接起不来。
+ */
+const HERE = path.dirname(fileURLToPath(import.meta.url))
+
+/**
+ * 资源根：子进程是被**外部 Node** 拉起的普通进程，拿不到 Electron 的 `process.resourcesPath`，
+ * 主进程因此把同一路径经 `EVA_TS_RESOURCES` 递进来（见 desktop-node/src/tsAgentCore.js）。
+ * 只认 resourcesPath 的话，打包态与开发态都会落到下面的仓库布局兜底。
+ */
+function resourcesRoot(): string {
+  return String(process.env.EVA_TS_RESOURCES || process.resourcesPath || "").trim()
+}
 
 /** 内置技能目录（调试可用 EVA_BUILTIN_SKILL_DIR 覆盖）。 */
 export function builtinSkillDir(): string {
   const explicit = String(process.env.EVA_BUILTIN_SKILL_DIR || "").trim()
   if (explicit && fs.existsSync(explicit)) return explicit
-  if (process.resourcesPath) {
-    const p = path.join(process.resourcesPath, "built-in-skill")
+  const root = resourcesRoot()
+  if (root) {
+    const p = path.join(root, "built-in-skill")
     if (fs.existsSync(p)) return p
   }
-  return path.resolve(__dirname, "..", "..", "built-in-skill")
+  return path.resolve(HERE, "..", "..", "built-in-skill")
 }
 
 /** 通用技能库目录（开发态 apps/skills / 打包态 resources/skills）：其余技能正文也能加载。 */
 function bundleSkillDir(): string {
   const explicit = String(process.env.EVA_SKILL_BUNDLE || "").trim()
   if (explicit && fs.existsSync(explicit)) return explicit
-  if (process.resourcesPath) {
-    const p = path.join(process.resourcesPath, "skills")
+  const root = resourcesRoot()
+  if (root) {
+    const p = path.join(root, "skills")
     if (fs.existsSync(p)) return p
   }
-  return path.resolve(__dirname, "..", "..", "skills")
+  return path.resolve(HERE, "..", "..", "skills")
 }
 
 /** 读一个根目录下所有子目录名（技能以目录形式存放：foo/ 或 foo/SKILL.md）。 */

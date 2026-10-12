@@ -401,6 +401,10 @@ class TsAgentHost {
       const lastEnd = [...events].reverse().find((e) => e && e.type === 'turn/end');
       const goal = first ? String(first.prompt || '') : '';
       const renamed = [...events].reverse().find((e) => e && e.type === 'session/renamed');
+      /* 空壳会话：只落了 session/meta、还没写 turn/start 就崩了（例如技能目录解析失败）。
+         它既没目标也没标题，侧栏只能回退显示 id（ts-xxx），看着像凭空多出一个任务——
+         没有内容可看的条目不进列表。 */
+      if (!goal.trim() && !renamed && events.length <= 1) continue;
       // 层级关系：优先读 session/meta，旧会话按 `-sub-<n>` 文件名兜底（与 agent-ts query.ts 同逻辑）
       const meta = events.find((e) => e && e.type === 'session/meta');
       let parentId = meta ? (meta.parentId || null) : null;
