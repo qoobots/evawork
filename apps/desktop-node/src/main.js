@@ -632,11 +632,17 @@ function createWindow() {
       log.info('[settings] 已放行麦克风请求：', details && details.requestingUrl);
       return cb(true);
     }
+    /* 正文末尾「复制全文」用的 navigator.clipboard.writeText 也会走权限请求
+       （clipboard-sanitized-write）；Electron 默认一律拒绝，不放行就永远复制失败。 */
+    if (permission === 'clipboard-sanitized-write' && ownOrigin(details && details.requestingUrl)) {
+      return cb(true);
+    }
     return cb(false);
   });
-  win.webContents.session.setPermissionCheckHandler((_wc, permission, origin) =>
-    permission === 'media' && ownOrigin(origin),
-  );
+  win.webContents.session.setPermissionCheckHandler((_wc, permission, origin) => {
+    if (permission === 'clipboard-sanitized-write') return ownOrigin(origin);
+    return permission === 'media' && ownOrigin(origin);
+  });
 
   // T-004：打包态从本地 HTTP 服务加载 UI；开发期走 vite（EVAWORK_UI_URL，默认 4173）。
   const uiUrl = envName('UI_URL');

@@ -434,16 +434,37 @@ const steps = ref<Step[]>([]);
 const output = ref('');
 const artifacts = ref<Artifact[]>([]);
 
-/* 正文末尾「复制全文」：把最终答案写进剪贴板，成功后图标短暂变成对勾 */
+/* 正文末尾「复制全文」：把最终答案写进剪贴板，成功后图标短暂变成对勾。
+   主路径是 navigator.clipboard；Electron 里该 API 依赖 clipboard-sanitized-write 权限，
+   老内核 / 权限被拒时回退到 execCommand（隐藏 textarea + 选区复制），仍失败才算失败。 */
 const copied = ref(false);
 let copiedTimer: ReturnType<typeof setTimeout> | undefined;
+function copyViaExecCommand(text: string): boolean {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch { ok = false; }
+  document.body.removeChild(ta);
+  return ok;
+}
 async function copyOutput(text: string) {
+  let ok = false;
   try {
     await navigator.clipboard.writeText(text);
+    ok = true;
+  } catch {
+    ok = copyViaExecCommand(text);
+  }
+  if (ok) {
     copied.value = true;
     clearTimeout(copiedTimer);
     copiedTimer = setTimeout(() => { copied.value = false; }, 1500);
-  } catch { /* 剪贴板不可用（无权限等）时静默失败，不打断阅读 */ }
+  }
 }
 const errMsg = ref('');
 const taskId = ref('');
