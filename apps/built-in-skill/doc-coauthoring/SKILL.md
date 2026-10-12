@@ -29,8 +29,8 @@ source: EvaWork 自撰
 
 ## 落盘
 
-- 改已有文件用 patch（精确替换），**不要整文件覆写**——覆写会丢掉别人刚改的内容。
-- 新建文档前先 list_dir／grep 看有没有同类文档，**沿用现有结构与命名**，别另起一套。
+- 改已有文件用 `sed`/`python`/`patch` 等做局部替换（精确替换），**不要整文件覆写**——覆写会丢掉别人刚改的内容。
+- 新建文档前先用 `run_command` / `terminal` 跑 `ls` / `find` / `grep` 看有没有同类文档，**沿用现有结构与命名**，别另起一套。
 - 写完把改动路径列给用户，并说明每一处改了什么。
 
 ## 收尾自检
@@ -39,4 +39,4 @@ source: EvaWork 自撰
 - 有没有「显然」「众所周知」这类把读者当内行的词？
 - 每个结论能不能追到材料（代码／数据／决策记录）？
 
-工具名以当前可用清单为准（read_file / list_dir / grep / write_file / patch / run_command / todo_write / delegate / load_skill）。
+工具以运行时注入的「可用工具」清单为准（系统提示会列出当前全部工具）。文件读写、列目录、搜内容、找文件、打补丁、删文件等一律通过 `run_command` / `terminal` 发 shell 命令完成；加载技能用 `load_skill`，派子代理用 `delegate`。

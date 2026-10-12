@@ -203,6 +203,6 @@ npm test path/to/test.test.ts
 ## 与本项目的关系
 
 - 用 `run_command` 跑测试并**读完整输出**（别只看最后一行）
-- 改代码用 `patch`，改完重跑测试
+- 改代码用 `sed`/`python`/`patch` 等，改完重跑测试
 - 大改动前可以先开**隔离副本**（TS-061），失败就直接丢弃，不影响工作区
 - 更多关于"怎么写好测试"：见同目录 [writing-good-tests.md](writing-good-tests.md)

@@ -147,8 +147,8 @@ source: obra/superpowers
 
 **与本项目的关系**：
 
-- 用 `write_file` 落盘计划（不要整文件覆写已有文档，用 `patch`）
-- 执行期用 `todo_write` 把任务变成可见进度
+- 用 `run_command` / `terminal` 把计划写到文件（尊重已有文档：改已有文件用 `sed`/`python` 等做局部替换，不要整文件覆写）
+- 执行期用 `run_command` / `terminal` 维护一份 markdown 任务清单，让进度可见
 - 本项目有 **plan mode（只规划）**：用户在界面上选「只规划」时，写计划就是那轮的全部产出，
   **不要动手改文件**
 - 大改动建议先开**隔离副本**（TS-061），失败直接丢弃

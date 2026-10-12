@@ -126,6 +126,6 @@ source: obra/superpowers
 
 - 本项目有 **plan mode（只规划）**：用户在界面选「只规划」时，这条路径就是那轮的全部产出
 - 有界的改动可以用**隔离副本**（TS-061）做，失败直接丢弃
-- 探索上下文用 `read_file` / `list_dir` / `grep`，**只读探索在硬门未完成时是允许的**
+- 探索上下文用 `run_command` / `terminal` 跑 `cat` / `ls` / `grep` 等只读命令，**只读探索在硬门未完成时是允许的**
 - 本项目还有 `doc-coauthoring`（写文档）与 `writing-plans`（写计划），
   它们分别是"规格写出来"与"计划写出来"的后续环节

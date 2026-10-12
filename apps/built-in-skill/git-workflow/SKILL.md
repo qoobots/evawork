@@ -44,4 +44,4 @@ source: EvaWork 自撰
 在 EvaWork 里做高风险重构时，可以先建隔离副本或留回滚点再动手——
 git 能管提交，管不了「我还没提交就被覆盖掉」的场景。
 
-工具名以当前可用清单为准（read_file / list_dir / grep / write_file / patch / run_command / todo_write / delegate / load_skill）。
+工具以运行时注入的「可用工具」清单为准（系统提示会列出当前全部工具）。文件读写、列目录、搜内容、找文件、打补丁、删文件等一律通过 `run_command` / `terminal` 发 shell 命令完成；加载技能用 `load_skill`，派子代理用 `delegate`。
