@@ -1,0 +1,27 @@
+{
+  "name": "evawork-desktop",
+  "version": "0.2.0",
+  "private": true,
+  "description": "EvaWork Desktop - AI 桌面工作台（Electron 壳 + Vue 渲染层 + TypeScript 智能体）",
+  "packageManager": "pnpm@11.10.0",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build": "pnpm -F @evawork/desktop-ui build",
+    "typecheck": "pnpm -F @evawork/desktop-ui typecheck",
+    "pack:dir": "node scripts/materialize_deps.mjs apps/agent-ts/node_modules apps/desktop-node/.agent-deps/node_modules && pnpm build && npm --prefix apps/desktop-node run pack:dir",
+    "pack": "node scripts/materialize_deps.mjs apps/agent-ts/node_modules apps/desktop-node/.agent-deps/node_modules && pnpm build && npm --prefix apps/desktop-node run pack",
+    "dist": "node scripts/materialize_deps.mjs apps/agent-ts/node_modules apps/desktop-node/.agent-deps/node_modules && pnpm build && npm --prefix apps/desktop-node run dist",
+    "shell": "npm --prefix apps/desktop-node start",
+    "test:plugins": "node --experimental-strip-types scripts/e2e-plugins.mjs",
+    "test:skills": "node --experimental-strip-types scripts/e2e-skills.mjs",
+    "test:mcp-readiness": "node --experimental-strip-types scripts/e2e-mcp-readiness.mjs",
+    "test:e2e": "pnpm test:plugins && pnpm test:skills && pnpm test:mcp-readiness"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
+    "playwright": "^1.63.0"
+  }
+}

@@ -22,118 +22,16 @@ interface PendingCall {
   args: string
 }
 
-/* ---- 请求看门狗（TS-066）----------------------------------------------------
-   对标前沿：Claude Code 的 API 层就带 **stream watchdog / stall 检测 / timeout** 三件套。
-   光有"一层兜底"挡不住"请求挂住"——挂住的那一步既不推进也不报错，
-   界面就一直转圈（实测：一个 turn 停在第 90 步的 agent/request 上再无回音）。
+/* ---- 请求时限 ------------------------------------------------------------
+   本模块**不再**自设超时：以前这里有"首字节 30s / 片间静默 60s / 总时长 10min"
+   三段看门狗，一旦触发就把这一步判死、吐一条"已放弃本步"的错误出来。
+   实测那是有害的：思考型模型在长上下文下**开吐第一个字之前**就可能超过 30s
+   （前面排着几十秒的推理），结果不慢的请求被当成"通道没响应"掐掉，
+   界面上不断重复"30s 内没返回任何数据"，每一步都白等一轮。
 
-   做成**三段**而不是一段，因为它们防的是三种不同的挂法：
-     connect  首字节超时   —— 连上了但不响应（网关卡住、上游排队）
-     idle     片间静默超时 —— 流开了但中途断流（最常见：上游生成到一半失联）
-     total    单次总时长   —— 一直在慢慢吐字，永远吐不完
-   只用 idle 挡不住"慢速滴漏"（每 59s 吐一个字也能永远跑下去）；
-   只用 total 又会把正常的长思考误杀。三段各管一段，才不留缝。
-
-   用 Node 内置 AbortController/AbortSignal 实现，**零依赖**（与本项目不装 SDK 一致）。 */
-function msFromEnv(name: string, fallback: number): number {
-  const v = Number(process.env[name] || "")
-  return Number.isFinite(v) && v > 0 ? v : fallback
-}
-
-export interface LlmTimeouts {
-  connectMs: number
-  idleMs: number
-  totalMs: number
-}
-
-export function llmTimeouts(): LlmTimeouts {
-  return {
-    connectMs: msFromEnv("EVA_TS_LLM_CONNECT_MS", 30_000),
-    idleMs: msFromEnv("EVA_TS_LLM_IDLE_MS", 60_000),
-    totalMs: msFromEnv("EVA_TS_LLM_TOTAL_MS", 600_000),
-  }
-}
-
-/**
- * 一次模型请求的看门狗：三段超时共用一个 AbortController。
- *
- * **用户取消（`external`）不归它管**，只是透传：取消是外部意图，必须原样报成
- * "请求被取消"，否则会被误报成"超时"——界面上的人会以为是自己网络的问题。
- */
-class RequestWatchdog {
-  private ctl = new AbortController()
-  private connect: ReturnType<typeof setTimeout> | null = null
-  private idle: ReturnType<typeof setTimeout> | null = null
-  private total: ReturnType<typeof setTimeout> | null = null
-  /** 触发原因：空串 = 尚未触发。`cancelled` 表示是外部信号触发的。 */
-  reason = ""
-  /* **不用参数属性**（`constructor(private t: LlmTimeouts)`）：子进程是
-     `node src/cli.ts` 直接跑的，走 Node 原生类型剥离，而它明确不支持参数属性
-     ——一加载就 `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`，整个智能体起不来。
-     同 terminal.ts / session.ts / mcp.ts 的做法：显式声明 + 显式赋值。 */
-  private t: LlmTimeouts
-
-  constructor(external: AbortSignal | undefined, t: LlmTimeouts) {
-    this.t = t
-    if (!external) return
-    if (external.aborted) this.fire("cancelled")
-    else external.addEventListener("abort", () => this.fire("cancelled"), { once: true })
-  }
-
-  /** 透传给 fetch 的信号：外部取消与本看门狗共用一条，谁先到算谁。 */
-  get signal(): AbortSignal {
-    return this.ctl.signal
-  }
-
-  /** 请求发出前：开始计首字节与总时长。 */
-  start(): void {
-    if (this.reason) return
-    this.connect = setTimeout(() => this.fire("connect"), this.t.connectMs)
-    this.total = setTimeout(() => this.fire("total"), this.t.totalMs)
-  }
-
-  /** 拿到响应头：首字节已过，转入"片间静默"计时。 */
-  connected(): void {
-    if (this.connect) {
-      clearTimeout(this.connect)
-      this.connect = null
-    }
-    this.tick()
-  }
-
-  /** 收到一片数据就重置静默计时——只要在动，就不算卡住。 */
-  tick(): void {
-    if (this.reason) return
-    if (this.idle) clearTimeout(this.idle)
-    this.idle = setTimeout(() => this.fire("idle"), this.t.idleMs)
-  }
-
-  private fire(reason: string): void {
-    if (this.reason) return
-    this.reason = reason
-    // 故意不传 reason：传了 fetch 会直接抛出该对象，`e.name === "AbortError"` 就判不出来了
-    try {
-      this.ctl.abort()
-    } catch {
-      /* 已 abort */
-    }
-  }
-
-  /** 收工：清掉计时器。不清的话它们会把事件循环拖住，进程退出不了。 */
-  dispose(): void {
-    for (const t of [this.connect, this.idle, this.total]) if (t) clearTimeout(t)
-    this.connect = this.idle = this.total = null
-  }
-}
-
-/** 把看门狗的触发原因翻译成人能读懂、且**能据此决定下一步**的一句话。 */
-function timeoutMessage(reason: string, t: LlmTimeouts): string {
-  const sec = (ms: number): string => `${Math.round(ms / 1000)}s`
-  if (reason === "cancelled") return "请求被取消"
-  if (reason === "connect") return `模型通道 ${sec(t.connectMs)} 内没返回任何数据（已放弃本步，可继续）`
-  if (reason === "idle") return `模型流静默超过 ${sec(t.idleMs)}（上游可能已断流，已放弃本步，可继续）`
-  return `单次模型请求超过总时限 ${sec(t.totalMs)}（已放弃本步，可继续）`
-}
+   慢 ≠ 挂死，超时猜不出来谁是哪一个，所以这里一律**等它**：
+     · 用户点停止 / 上层取消一律透传：那是外部意图，必须原样报成"请求被取消"。
+   好处很简单：模型慢慢吐就让它吐完，不必按秒猜它的死活。 */
 
 function openaiTools(schemas: unknown[] | undefined): unknown[] | undefined {
   return schemas && schemas.length ? schemas : undefined
@@ -236,14 +134,11 @@ export async function* streamChat(
     // 请求留痕：把发出去的完整 body（含 system 提示词）写盘，调提示词时复盘用
     traceRequest(opts.step, model, body)
 
-    const timeouts = llmTimeouts()
-    const wd = new RequestWatchdog(opts.signal, timeouts)
     let resp: Response | null = null
     let errMsg = ""
     try {
       // 走统一出口：模型通道也要受 allowlist 约束，否则"配了白名单"对最主要的
       // 一个外联方向完全不生效
-      wd.start()
       resp = await egressFetch(url, {
         method: "POST",
         headers: {
@@ -253,14 +148,13 @@ export async function* streamChat(
           ...(cfg.token ? { Authorization: `Bearer ${cfg.token}` } : {}),
         },
         body: JSON.stringify(body),
-        signal: wd.signal,
+        // 直接透传上层给的信号：取消由它带进来，本文件不再自备计时器
+        signal: opts.signal,
       })
-      wd.connected()
     } catch (err) {
-      // fetch 失败只给TypeError，连不上和超时长得一样，必须自己说清
+      // fetch 失败只给TypeError，连不上和取消长得一样，必须自己说清
       const e = err as { name?: string; message?: string }
-      if (wd.reason) errMsg = timeoutMessage(wd.reason, timeouts)
-      else errMsg = e.name === "AbortError" ? "请求被取消" : `连不上模型通道（${url}）：${e.message || e.name}`
+      errMsg = e.name === "AbortError" ? "请求被取消" : `连不上模型通道（${url}）：${e.message || e.name}`
     }
 
     if (resp && (!resp.ok || !resp.body)) {
@@ -272,13 +166,9 @@ export async function* streamChat(
     if (!resp || errMsg) {
       /* 请求阶段就失败 = **一个字都还没吐出去**，这时换下一个模型是安全的；
          流已经开了再重试，前半截回答会重复一遍，所以只在这个点换。
-         401/403 是凭据问题，**换哪个模型都一样**，不做无意义的重试。
-         超时同理：换模型很可能再挂一次，而且用户已经等了几十秒——不如如实停下。 */
-      wd.dispose()
+         401/403 是凭据问题，**换哪个模型都一样**，不做无意义的重试。 */
       const authFailed = /登录态失效或无权限/.test(errMsg)
-      // 超时不再换下一个候选：用户已经等了几十秒，再挂一次只会更久；如实停下让他决定
-      const timedOut = wd.reason !== "" && wd.reason !== "cancelled"
-      if (!authFailed && !timedOut && i < models.length - 1) {
+      if (!authFailed && i < models.length - 1) {
         telemetry.count("model/fallback")
         continue
       }
@@ -298,7 +188,6 @@ export async function* streamChat(
     for (;;) {
       const { value, done } = await reader.read()
       if (done) break
-      wd.tick() // 收到一片就续命：只要还在动就不算卡住
       buf += decoder.decode(value, { stream: true })
       const parts = buf.split("\n")
       buf = parts.pop() ?? ""
@@ -340,15 +229,13 @@ export async function* streamChat(
     }
   } catch (err) {
     const e = err as { name?: string; message?: string }
-    /* 看门狗触发要**报成 error，不能报成 done**：报成 done 等于告诉 loop
-       "这一轮正常结束了"，于是模型没说的话就凭空消失，界面上还显示已完成。
-       挂住必须在明面上——这是 TS-066 修的那个"停在第 90 步再也回不来"的病根。 */
-    if (wd.reason) yield { type: "error", message: timeoutMessage(wd.reason, timeouts) }
-    else if (e.name === "AbortError") yield { type: "done", finish: "aborted" }
+    /* 被掐断（用户停止 / 上层取消）要报 `done/aborted`，让它区别于"读取失败"：
+       这两件事的上层判据是信号本身，loop 会据 signal 如实判成 cancelled，
+       报成 error 只会把"用户主动停"误写成"模型出错"。 */
+    if (e.name === "AbortError") yield { type: "done", finish: "aborted" }
     else yield { type: "error", message: `读取模型流失败：${e.message || e.name}` }
     return
   } finally {
-    wd.dispose()
     try { await reader.cancel() } catch { /* 已结束 */ }
   }
 

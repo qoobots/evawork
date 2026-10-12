@@ -1,0 +1,364 @@
+/* EvaWork 全局样式：设计令牌 · 亮/暗两套主题 · 通用组件类
+ * T-051：颜色一律走 var(--*)；暗色只覆盖 `<html data-theme="dark">` 上的令牌值，
+ * 组件里不许再写死色值，否则暗色下会出现"半截变暗"的斑块。 */
+:root {
+  /* T-120：顶部窗口栏（无边框窗口的标题栏带）高度。内容让位多少、窗口按钮多高都看它，
+     必须与 desktop-node/src/main.js 的 TITLEBAR_H 同值，差一点按钮就会歪出这条带。
+     关掉自定义标题栏时（html 上没有 .custom-chrome，见 main.ts）由下面的规则归零。 */
+  --titlebar-h: 36px;
+  --bg: #f5f6f7;
+  --panel: #ffffff;
+  --line: #ebecee;
+  --line-2: #f1f2f3;
+  --t1: #212429;
+  --t2: #5f646b; /* T-053 a11y：原 #868c94 在浅底对比度仅 3.13，调深至 ≥4.5 */
+  --t3: #6b7077; /* T-053 a11y：原 #b9bec5 仅 1.86，调深至 ≥4.5（占位/禁用文字） */
+  --green: #007a4f; /* T-053 a11y：原 #0cb277 在浅绿底仅 2.46，调深至 ≥4.5 */
+  --green-bg: #e5f7f0;
+  --blue: #1f5fd0; /* T-053 a11y：原 #4d80f0 在浅蓝底仅 3.3，调深至 ≥4.5 */
+  --blue-bg: #ecf2fe;
+  --violet: #5b57d9;
+  --violet-bg: #efedff;
+  --orange: #e8930c;
+  --orange-bg: #fdf3e1;
+  --red: #e5484d;
+  --red-bg: #fdebec;
+  --ink: #1b1c1f;
+  --ink-hover: #33353a;
+  /* 交互态：过去写死在组件里，现在收进令牌，暗色才有得可改 */
+  --hover: #ececee;
+  --active-bg: #e8e9eb;
+  --chip-active: #e7e8ea;
+  --switch-off: #d9dbde;
+  --switch-knob: #ffffff;
+  --scroll-thumb: #d6d8db;
+  --shadow: 0 8px 32px rgba(23, 25, 30, 0.12);
+  --radius: 12px;
+  /* 语义色：错误 / 成功 / 禁用态 */
+  --err: #d64545;
+  --err-bg: #fdecec;
+  --ok: #0a7a52;
+  --ok-bg: #e5f7f0;
+  --violet-soft: #c9c7f1;
+}
+
+/* T-120：没有自定义标题栏（macOS：原生标题栏还在）时不留顶部拖拽带，
+   否则会白空出一条 36px。用 min-height/padding 引用 --titlebar-h 的地方自动跟着归零。 */
+html:not(.custom-chrome) { --titlebar-h: 0px; }
+
+/* ---------- 暗色令牌 ---------- */
+[data-theme='dark'] {
+  --bg: #16171a;
+  --panel: #1e2024;
+  --line: #2b2e33;
+  --line-2: #26292e;
+  --t1: #e6e8ea;
+  --t2: #9aa1a9;
+  --t3: #6f767e;
+  --green: #2ec27e;
+  --green-bg: #163024;
+  --blue: #6d97f5;
+  --blue-bg: #1c2740;
+  --violet: #8b86f0;
+  --violet-bg: #262443;
+  --orange: #f0a63c;
+  --orange-bg: #33280f;
+  --red: #f0656b;
+  --red-bg: #3a1c1e;
+  --ink: #e6e8ea;
+  --ink-hover: #cfd3d7;
+  --hover: #272a2f;
+  --active-bg: #2b2e33;
+  --chip-active: #2b2e33;
+  --switch-off: #3a3e44;
+  --switch-knob: #d7dade;
+  --scroll-thumb: #3a3e44;
+  --shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+  --err: #f0656b;
+  --err-bg: #3a1c1e;
+  --ok: #2ec27e;
+  --ok-bg: #163024;
+  --violet-soft: #3b3a63;
+}
+
+/* ---------- 管理控制台令牌：跟随全局亮/暗主题（T-053 技术债修复 / 设置并入 T-128） ---------- */
+/* 原控制台是"常驻深色"独立壳：T-128 把设置并进来后，设置页也跟着成了深色，
+   于是和首页主题不一致。现改为复用全局主题令牌——--ac-* 全部别名到
+   var(--bg)/var(--panel)/var(--line)/var(--t1)… 这些全局令牌已在 :root（亮）与
+   [data-theme='dark']（暗）上定义，故控制台随全局主题切换，与首页保持一致。
+   品牌色保持固定；控制台子树外不应使用这些令牌。 */
+.admin-console {
+  --ac-app-bg: var(--bg);
+  --ac-text: var(--t1);
+  --ac-nav-border: var(--line);
+  --ac-text-muted-strong: var(--t2);
+  --ac-white: #fff;
+  --ac-hover: var(--hover);
+  --ac-active: var(--active-bg);
+  --ac-green: var(--green);
+  --ac-green-fg: #fff;
+  --ac-avatar-1: #9ec3f5;
+  --ac-avatar-2: #6f8ef2;
+  --ac-text-muted: var(--t2);
+  --ac-orange: var(--orange);
+  --ac-panel: var(--panel);
+  --ac-border: var(--line);
+  --ac-surface: var(--panel);
+  --ac-surface-2: var(--line-2);
+  --ac-surface-3: var(--hover);
+  --ac-error-bg: var(--err-bg);
+  --ac-error: var(--err);
+  --ac-blue: var(--blue);
+  --ac-btn-light: var(--t1);
+  --ac-btn-light-fg: #fff;
+  --ac-text-muted-2: var(--t3);
+  --ac-green-disabled-bg: var(--green-bg);
+  --ac-green-disabled-fg: var(--t3);
+  --ac-border-2: var(--line-2);
+  --ac-focus: color-mix(in srgb, var(--green) 30%, transparent);
+  --ac-danger: var(--red);
+  --ac-danger-hover: var(--red);
+  --ac-text-muted-3: var(--t3);
+  --ac-icon-border: var(--line);
+  --ac-green-soft: var(--green);
+  --ac-icon-ring: rgba(127, 127, 127, 0.10);
+  --ac-toggle-off: var(--switch-off);
+  --ac-brand-github: #24292e;
+  --ac-brand-notion: #1f1f21;
+  --ac-brand-figma: #a259ff;
+  --ac-brand-linear: #5e6ad2;
+  --ac-brand-slack: #4a154b;
+  --ac-brand-zotero: #cc2936;
+  --ac-text-faint: var(--t3);
+  --ac-heat-0: var(--line-2);
+  --ac-heat-1: color-mix(in srgb, var(--green) 22%, var(--bg));
+  --ac-heat-2: color-mix(in srgb, var(--green) 42%, var(--bg));
+  --ac-text-soft: var(--t2);
+  --ac-bar-fill: var(--line);
+  --ac-green-bg-soft: var(--green-bg);
+  --ac-surface-4: var(--line-2);
+  --ac-hover-2: var(--hover);
+  --ac-danger-bg: var(--err-bg);
+  --ac-green-bright-2: var(--green);
+}
+
+/* ---------- 未接入 / 即将上线控件：明确禁用态（诚实修复，见 05 文档「下一步建议」#1） ---------- */
+/* ◻ 静态控件本应「要么接上动作、要么明确禁用态」。统一用 data-coming 标记为禁用外观，
+   配合 title 提示与 aria-disabled，避免与可点控件混淆、被误认为已实现。
+   不设置 pointer-events:none，hover 仍可显示 title 提示。 */
+[data-coming] {
+  cursor: not-allowed;
+  opacity: 0.5;
+  filter: grayscale(0.35);
+  transition: opacity 0.15s ease;
+  user-select: none;
+}
+[data-coming]:hover { opacity: 0.62; }
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body, #app { height: 100%; }
+body {
+  font-family: 'Segoe UI', 'Microsoft YaHei', system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  color: var(--t1);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+/* ---------- 选中与复制（T-100）----------
+   以前这里挂的是 `body { user-select: none }`——桌面应用常见的"防拖蓝"写法，
+   代价是**正文也一起选不中**：用户拿到一份分析结论，却没法摘走里面的任何一句，
+   连"复制"都无从谈起。一条 CSS 把内容的可用性全废了，划不来。
+   现在反过来：内容默认可选可复制，只在"界面外壳"上禁用——
+   拖侧栏、连点按钮时不该拖蓝一片，那是外壳该管的事。 */
+nav, aside, header, footer, button, [role="tab"], [data-coming] {
+  user-select: none;
+}
+/* 外壳里也常嵌着要读的内容（预览区、代码、正文、文件名）→ 显式放行。
+   类选择器优先级高于上面的元素选择器，无需 !important。 */
+input, textarea, select, pre, code,
+.md, .md-body, .ai-out, .msg-bubble, .nar-line,
+.art-body, .art-code, .art-md, .art-name,
+.wp-body, .wp-code, .wp-tree, .wp-name,
+.tp-body, .run-out, .dp-t, .rt-o {
+  user-select: text;
+}
+/* 深色主题下默认选中底色不明显，给一个看得见的高亮 */
+::selection { background: rgba(139, 122, 255, 0.40); color: #fff; }
+
+a { color: inherit; text-decoration: none; }
+button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+input, textarea, select { font: inherit; color: inherit; }
+
+/* T-118：拖侧栏宽度时，指针早就飘到正文上方了——光标/选区不能被"指针底下的东西"接管，
+   否则拖到段落上光标变文本形、还顺手拉起一片选区。松手时由组件摘掉这个类。 */
+body.col-resizing, body.col-resizing * { cursor: col-resize !important; user-select: none !important; }
+
+/* ---------- 键盘可达（T-053） ----------
+   只给鼠标用的 hover 态不算交互反馈；键盘用户需要看得见的焦点环。 */
+:focus { outline: none; }
+:focus-visible {
+  outline: 2px solid var(--violet);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+/* 键盘可达但视觉隐藏（给读屏用的说明文字） */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border-radius: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* ---------- 通用布局 ---------- */
+.page { padding: 36px 44px; max-width: 1280px; }
+.page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.page-title { font-size: 24px; font-weight: 700; letter-spacing: 0.2px; }
+.page-sub { margin-top: 8px; font-size: 13px; color: var(--t2); }
+.grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+.muted { color: var(--t2); }
+.small { font-size: 12px; }
+
+/* ---------- 按钮 ---------- */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 32px; padding: 0 14px; border-radius: 8px;
+  background: var(--panel); border: 1px solid var(--line);
+  font-size: 13px; color: var(--t1); transition: background 0.15s;
+  white-space: nowrap;
+}
+.btn:hover { background: var(--line-2); }
+.btn-dark { background: var(--ink); border-color: var(--ink); color: var(--bg); }
+.btn-dark:hover { background: var(--ink-hover); }
+.btn-green { background: var(--green); border-color: var(--green); color: #fff; }
+.btn-green:hover { background: #0aa06b; }
+.btn-link { border: none; background: none; color: var(--blue); padding: 0 6px; height: 28px; }
+.btn-link:hover { opacity: 0.8; background: none; }
+.btn-plain { border: none; background: none; height: 28px; padding: 0 8px; color: var(--t2); border-radius: 6px; }
+.btn-plain:hover { background: var(--line-2); color: var(--t1); }
+.icon-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border-radius: 6px; color: var(--t2);
+}
+.icon-btn:hover { background: var(--line-2); color: var(--t1); }
+
+/* ---------- 卡片 ---------- */
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
+
+/* ---------- 标签 / 徽标 ---------- */
+.tag { display: inline-flex; align-items: center; font-size: 11px; padding: 2px 8px; border-radius: 6px; line-height: 18px; }
+.tag-green { background: var(--green-bg); color: var(--green); }
+.tag-orange { background: var(--orange-bg); color: var(--orange); }
+.tag-violet { background: var(--violet-bg); color: var(--violet); }
+.tag-blue { background: var(--blue-bg); color: var(--blue); }
+.tag-gray { background: var(--line-2); color: var(--t2); }
+.badge {
+  min-width: 16px; height: 16px; padding: 0 5px; border-radius: 8px;
+  background: var(--violet); color: #fff; font-size: 10px; font-weight: 600;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+
+/* ---------- 分段 Tab ---------- */
+.seg { display: inline-flex; gap: 4px; }
+.seg-item {
+  padding: 6px 14px; border-radius: 8px; font-size: 13px; color: var(--t2);
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.seg-item:hover { color: var(--t1); }
+.seg-item.active { background: var(--active-bg); color: var(--t1); font-weight: 500; }
+.seg-item.active.on-dark { background: rgba(255, 255, 255, 0.12); color: #fff; }
+
+/* ---------- 圆角筛选 chips ---------- */
+.chip {
+  height: 28px; padding: 0 13px; border-radius: 999px; font-size: 13px;
+  color: var(--t2); display: inline-flex; align-items: center; gap: 5px;
+  border: 1px solid transparent; transition: 0.15s;
+}
+.chip:hover { color: var(--t1); background: var(--line-2); }
+.chip.active { background: var(--chip-active); color: var(--t1); font-weight: 500; }
+
+/* ---------- 表单 ---------- */
+.input {
+  height: 32px; border: 1px solid var(--line); border-radius: 8px;
+  padding: 0 10px; font-size: 13px; background: var(--panel); outline: none;
+  transition: border 0.15s;
+}
+.input:focus { border-color: var(--t3); }
+.input::placeholder { color: var(--t3); }
+.search-box { display: inline-flex; align-items: center; gap: 6px; }
+
+/* ---------- 开关 ---------- */
+.switch {
+  width: 38px; height: 21px; border-radius: 999px; background: var(--switch-off);
+  position: relative; transition: background 0.2s; flex: none;
+}
+.switch::after {
+  content: ''; position: absolute; top: 2px; left: 2px; width: 17px; height: 17px;
+  border-radius: 50%; background: var(--switch-knob); transition: left 0.2s;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+.switch.on { background: var(--green); }
+.switch.on::after { left: 19px; }
+
+/* ---------- 单选卡 ---------- */
+.radio-card { display: flex; gap: 12px; padding: 14px 16px; border-radius: 10px; cursor: pointer; align-items: flex-start; }
+.radio-card:hover { background: var(--line-2); }
+.radio-dot {
+  width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid var(--t3);
+  margin-top: 2px; flex: none; position: relative;
+}
+.radio-card.active .radio-dot { border-color: var(--violet); }
+.radio-card.active .radio-dot::after {
+  content: ''; position: absolute; inset: 3px; border-radius: 50%; background: var(--violet);
+}
+
+/* ---------- 弹窗 ---------- */
+.modal-mask {
+  position: fixed; inset: 0; background: rgba(20, 22, 26, 0.4); z-index: 60;
+  display: flex; align-items: center; justify-content: center;
+}
+.modal {
+  background: var(--panel); border-radius: 16px; box-shadow: var(--shadow);
+  padding: 24px; position: relative; max-height: 84vh; overflow: auto;
+}
+.modal-title { font-size: 18px; font-weight: 700; }
+.modal-close { position: absolute; top: 16px; right: 16px; }
+
+/* ---------- 列表行 ---------- */
+.row-card {
+  display: flex; align-items: center; gap: 14px; padding: 16px 18px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+}
+.row-card + .row-card { margin-top: 12px; }
+
+/* ---------- 空状态 ---------- */
+.empty { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 64px 0; color: var(--t2); gap: 10px; }
+.empty-icon {
+  width: 44px; height: 44px; border-radius: 12px; background: var(--line-2);
+  display: flex; align-items: center; justify-content: center; color: var(--t3);
+}
+
+/* ---------- 工具调用（T-070，新建任务页与模板运行共用） ---------- */
+.run-note { margin: 8px 0 0; font-size: 11.5px; color: var(--t2); }
+.run-tools { margin-top: 12px; border-top: 1px solid var(--line-2); padding-top: 10px; }
+.rt-t { font-size: 11.5px; color: var(--t3); margin-bottom: 6px; }
+.rt-item { border: 1px solid var(--line); border-radius: 8px; margin-bottom: 6px; overflow: hidden; }
+.rt-h { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 10px; font-size: 12px; text-align: left; }
+.rt-h:hover { background: var(--line-2); }
+.rt-n { flex: none; font-weight: 600; }
+.rt-a { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--t3); font-size: 11.5px; text-align: left; }
+.rt-s { flex: none; font-size: 11px; color: var(--t2); }
+/* T-074：工具耗时（并发执行时多个耗时会重叠，是这个数字存在的意义） */
+.rt-ms { flex: none; font-size: 11px; color: var(--t3); font-variant-numeric: tabular-nums; }
+.rt-item.ok .rt-s { color: var(--ok); }
+.rt-item.fail .rt-s { color: var(--err); }
+.rt-o { margin: 0; padding: 8px 10px; border-top: 1px solid var(--line-2); background: var(--line-2); font-size: 11.5px; white-space: pre-wrap; word-break: break-word; max-height: 180px; overflow: auto; }

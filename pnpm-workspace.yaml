@@ -7,6 +7,7 @@ packages:
   # MCP 服务打包包：随应用分发，让 npx 类服务跑本地副本（见 spawn.ts 的本地解析）
   - 'apps/mcp-bundle'
   # 内置 MCP 服务：一个服务一个薄包，依赖各自声明；由 mcp-bundle 聚合后随包分发
+  - 'apps/agent-ts'  # 现在带 npm 依赖（docx/pdf-lib/xlsx/pptxgenjs/isomorphic-git…），必须进 workspace 让 pnpm 建 node_modules；否则打包时 materialize 找不到 apps/agent-ts/node_modules，.agent-deps 实体化跳过，产物里 agent-ts 运行缺依赖崩溃。根 build/typecheck 都是 -F 作用域，不会误拽它。
   - 'apps/mcp/*'
 
 allowBuilds:

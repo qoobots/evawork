@@ -52,14 +52,6 @@ export function tsSessionOf(taskId: string): string {
  */
 const CHANNEL_IDLE_MS = 300_000;
 
-/**
- * **预算/上限类**的中止原因：任务没坏，只是被截停了，已产出的内容都还在上下文里。
- * 界面据此给「继续」（复用会话续跑），而不是「重试」——"重试"暗示从头重来，
- * 而同会话重跑本就会重投影事件日志，那其实是续跑不是重来，叫错了连事实都不符。
- * 其余（真错误 / 死循环 / 进程被杀）才走"出错 + 重试"。
- */
-const BUDGET_STOPS = new Set(['deadline', 'timeout', 'stalled']);
-
 /** 停止一轮（协作式：TS 侧在本步边界停下）。传任务页里的 taskId。 */
 export async function cancelTsAgentFor(taskId: string): Promise<void> {
   const sid = tsSessionOf(taskId);
@@ -235,11 +227,6 @@ export async function* streamTsTask(
           case 'step/error':
             yield { type: 'notice', message: String(e.error || '本步出错') };
             break;
-          case 'step/timeout': {
-            const sec = Math.round(Number(e.timeoutMs || 0) / 1000);
-            yield { type: 'notice', message: sec > 0 ? `本步超过单步时限 ${sec}s，已停下（可继续）` : '本步超时，已停下（可继续）' };
-            break;
-          }
           default:
             break;
         }
@@ -267,9 +254,6 @@ export async function* streamTsTask(
         const task = fakeTask(sessionId, '', stop === 'cancelled' ? 'cancelled' : failed > 0 ? 'partial' : 'done');
         if (stop === 'cancelled') {
           yield { type: 'cancelled', task, reason: '已停止' };
-        } else if (BUDGET_STOPS.has(stop)) {
-          yield { type: 'step', step: stepOf('ts-1', 'TS 智能体执行中', 'failed') };
-          yield { type: 'limit', message: String(fin.note || '被预算截停，已暂停'), stop };
         } else if (stop !== 'completed') {
           yield { type: 'step', step: stepOf('ts-1', 'TS 智能体执行中', 'failed') };
           yield { type: 'error', message: String(fin.note || `未正常结束（${stop}）`) };
@@ -383,10 +367,6 @@ export async function* replayTsTask(sessionId: string): AsyncGenerator<ReplayEve
         const task = fakeTask(sessionId, '', stop === 'cancelled' ? 'cancelled' : failed > 0 ? 'partial' : 'done');
         if (stop === 'cancelled') {
           yield { type: 'cancelled', task, reason: String(e.note || '已停止') };
-        } else if (BUDGET_STOPS.has(stop)) {
-          // 与实时流同一套分类：预算/上限类给"继续"，真失败类才给"重试"
-          yield { type: 'step', step: stepOf('ts-1', 'TS 智能体执行中', 'failed') };
-          yield { type: 'limit', message: String(e.note || '被预算截停，已暂停'), stop };
         } else if (stop !== 'completed') {
           yield { type: 'step', step: stepOf('ts-1', 'TS 智能体执行中', 'failed') };
           yield { type: 'error', message: String(e.note || `未正常结束（${stop}）`) };

@@ -4,9 +4,10 @@
 // （这个概念与 deepseek-harness 的 turn flow 一致，Python 版 evawork 里叫"步骤"。）
 //
 // 刻意的边界：
-//   1. **不按步数收口**。跑多少步由模型按任务复杂度自己决定——写死一个上限等于替它猜，
-//      猜小了只能让用户点「继续」补救，猜大了这个上限又形同虚设。真正的失控有两种：
-//      绕不出来（`LoopGuard` 的重复调用 / 无进展）和跑太久（墙钟），都在 `guard.ts` 里管。
+//   1. **不按步数 / 不按时间 / 不按"有没有进展"收口**。跑多少步、跑多久由模型按任务
+//      复杂度自己决定——写死上限等于替它猜，猜错了只能让用户点「继续」补救。
+//      真正的失控只有一个硬证据：绕不出来（同一工具 + 完全相同参数反复调用，
+//      由 `LoopGuard` 判定）；慢与长都不是失控，不再替用户"好心收尾"。
 //   2. **取消是协作式**的：收到 AbortSignal 就在当前 step 边界停，已拿到的正文原样保留，
 //      不重发、不重试（用户已经不想看了）。
 
@@ -17,8 +18,7 @@ export type { StopReason }
 import { streamChat } from "./llm.ts"
 import { allTools, executeTool, openaiSchemas, parseArgs, preExecute } from "./tools.ts"
 import type { SessionLog } from "./session.ts"
-import { defaultStopConditions, firstStop, LoopGuard } from "./guard.ts"
-import type { StopCondition } from "./guard.ts"
+import { LoopGuard } from "./guard.ts"
 import { maybeSpill } from "./spill.ts"
 import { compactMessages, projectEvents, clipText, estimateTokens, withCompactSummary } from "./context.ts"
 import type { ContextUsage } from "./context.ts"
@@ -38,7 +38,7 @@ export type StreamFn = (
   opt: { tools?: unknown[]; signal?: AbortSignal },
 ) => AsyncIterable<StreamChunk>
 
-export interface TurnOptions extends TurnStopOptions {
+export interface TurnOptions {
   prompt: string
   cfg: LlmConfig
   workspace: string
@@ -66,46 +66,6 @@ export interface TurnOptions extends TurnStopOptions {
   onTool?: (name: string, args: Record<string, unknown>, res: ToolResult | null, denied: string) => void
   /** 每个落盘事件也推一份给调用方（SDK 用它把事件流转发给外部进程）。 */
   onEvent?: (e: SessionEvent) => void
-}
-
-/** 停止条件可整体替换（测试/子代理用）：不填就用 `defaultStopConditions`。 */
-export interface TurnStopOptions {
-  stopWhen?: StopCondition[]
-  /** 墙钟预算（ms） */
-  deadlineMs?: number
-  /** 连续无进展步数上限 */
-  stallSteps?: number
-  /** 单步墙钟上限（ms）。可注入是为了能测：默认取自 `guard.ts` 的环境/常量。 */
-  stepTimeoutMs?: number
-}
-
-/**
- * 合并多个取消信号（零依赖）。
- *
- * 不用 `AbortSignal.any`：一是它的 TS 类型在部分 lib 版本里缺失，二是我们要的语义
- * 只是"谁先到算谁"，手写十行就够，不值得为此改 tsconfig。
- */
-function mergeSignals(list: (AbortSignal | undefined)[]): { signal: AbortSignal; dispose: () => void } {
-  const src = list.filter((s): s is AbortSignal => !!s)
-  // 总是新建自己的 controller：返回 `src[0]` 会让调用方把监听器挂到**外部**信号上，
-  // 每步挂一个、又不一定摘得掉，跑满 100 步就撞 MaxListenersExceededWarning。
-  const ctl = new AbortController()
-  if (!src.length) return { signal: ctl.signal, dispose: () => {} }
-  if (src.some((s) => s.aborted)) {
-    ctl.abort()
-    return { signal: ctl.signal, dispose: () => {} }
-  }
-  const bound = src.map((s) => {
-    const h = (): void => ctl.abort()
-    s.addEventListener("abort", h, { once: true })
-    return { s, h }
-  })
-  return {
-    signal: ctl.signal,
-    dispose: () => {
-      for (const b of bound) b.s.removeEventListener("abort", b.h)
-    },
-  }
 }
 
 /* ---- 第二层压缩：把被丢掉的轮次让模型归档成结论（借鉴 DSH） ----
@@ -243,22 +203,7 @@ export async function runTurn(o: TurnOptions): Promise<TurnResult> {
   const stopTurn = telemetry.time("turn")
 
   /** 循环卫生（TS-024）：只做判定，停不停由下面决定。 */
-  const guard = new LoopGuard({ stepTimeoutMs: o.stepTimeoutMs })
-
-  /* 结构化停止条件（TS-066）：**墙钟 + 无进展**一起判，没有步数这一项——
-     跑多少步由模型自己决定，拿步数卡它就是替它猜答案。
-     这两项都不看本轮的运行时状态，建好就一直用。 */
-  const stopWhen =
-    o.stopWhen ??
-    defaultStopConditions({
-      deadlineMs: o.deadlineMs,
-      stallSteps: o.stallSteps,
-    })
-
-  const startedAt = Date.now()
-  /** 距上一次"有进展"过去了多少步（进展 = 本步至少有一个工具执行成功）。 */
-  let stepsSinceProgress = 0
-  let progressedThisStep = false
+  const guard = new LoopGuard()
 
   /** 落盘 + 转发给调用方（SDK 靠它把事件流推给外部进程）。 */
   const emit = (ev: Omit<SessionEvent, "seq" | "ts">): SessionEvent => {
@@ -313,16 +258,7 @@ export async function runTurn(o: TurnOptions): Promise<TurnResult> {
 
   for (;;) {
     if (o.signal?.aborted) { stopReason = "cancelled"; note = "收到取消信号，已在本步边界停下"; break }
-    /* 停止条件在**每步开始前**判一次（不是只在末尾）：撞线的那一刻就停，
-       不再发一次注定要被丢掉的模型请求。 */
-    const verdict = firstStop(stopWhen, { steps, startedAt, stepsSinceProgress, now: Date.now() })
-    if (verdict) {
-      stopReason = verdict.reason
-      note = verdict.note
-      break
-    }
     steps += 1
-    progressedThisStep = false
     telemetry.count("step")
     emit({ type: "step/start", step: steps })
     emit({ type: "agent/step", step: steps })
@@ -377,32 +313,19 @@ export async function runTurn(o: TurnOptions): Promise<TurnResult> {
        所以算出来的占比与真实占用一致（不是"猜"出来的另一套数）。 */
     o.onUsage?.(computeContextUsage({ system: sp, promptCtx: ctx, tools: visible, messages }))
 
-    /* 单步超时（TS-066）：`guard.stepTimeoutMs` 以前是**死配置**——guard 里定义了值，
-       loop 里从没读过，等于没兜底，所以"请求挂住"能一直挂到天亮。
-       这里把它接上，并且用同一个 signal 同时取消**模型请求和工具执行**：
-       不止是"不再等它"，而是真的把在途请求掐掉，否则挂住的 fetch 还占着连接。
-       模型通道另有自己的三段看门狗（首字节/片间静默/总时长，见 llm.ts），
-       那是内层；这里是外层兜底，两者不冲突。 */
-    const stepCtl = new AbortController()
-    const stepTimer = setTimeout(() => stepCtl.abort(), guard.stepTimeoutMs)
-    // unref：本步正常结束后即使忘了清，也别让这个计时器拖住进程退出
-    ;(stepTimer as unknown as { unref?: () => void }).unref?.()
-    const stepSig = mergeSignals([o.signal, stepCtl.signal])
-    /** 单步超时到了（且**不是**用户点的取消——那要报 cancelled，语义不同）。 */
-    const stepTimedOut = (): boolean => stepCtl.signal.aborted && !o.signal?.aborted
-
+    /* 不设单步时限：慢 ≠ 挂死，按秒猜模型的死活只会把正常的长思考/长工具
+       误杀成"已放弃本步"（实测：长上下文下委托一个子代理跑满 300s 很正常）。
+       收尾只看两个信号：用户点停止（o.signal）与整轮的墙钟/无进展停止条件，
+       它们会在下一步开跑前如实把这一轮停下。 */
     emit({ type: "agent/request", step: steps, messages: messages.length })
     let text = ""
     let calls: ToolCall[] = []
     let err = ""
     const stream = o.stream ?? streamChat
-    /* 与单步超时**赛跑**，而不是"等流结束再回过头看表"：卡住的那一步根本不会结束，
-       回看那一行永远执行不到——那正是 TS-066 要治的病（挂在 agent/request 上不返回）。
-       赛跑输了也不等它：继续往下走，由 stepTimedOut() 如实收尾。 */
     const pump = (async (): Promise<void> => {
       for await (const chunk of stream(o.cfg, messages, {
         tools: openaiSchemas(visible),
-        signal: stepSig.signal,
+        signal: o.signal,
         step: steps,
       })) {
         if (chunk.type === "text") {
@@ -415,27 +338,12 @@ export async function runTurn(o: TurnOptions): Promise<TurnResult> {
         }
       }
     })()
-    // 先挂个兜底：赛跑输了以后 pump 仍在跑，它若之后 reject 会变成 unhandled rejection
-    pump.catch(() => undefined)
-    await Promise.race([
-      pump,
-      new Promise<void>((res) => stepSig.signal.addEventListener("abort", () => res(), { once: true })),
-    ])
+    await pump
 
     // 用户点了停止：就得报"已取消"，不能因为它这轮没再调工具而报"已完成"
     if (o.signal?.aborted) {
       stopReason = "cancelled"
       note = "收到取消信号，已停下（已流出的正文保留）"
-      break
-    }
-
-    /* 单步超时：这一步卡住了（最常见就是模型请求没回来）。
-       必须排在"模型没调工具 → 已完成"**之前**判——否则卡住的那一步会被当成
-       正常结束，界面显示"已完成"而它其实一步都没走完。 */
-    if (stepTimedOut()) {
-      stopReason = "timeout"
-      note = `第 ${steps} 步超过单步时限 ${Math.round(guard.stepTimeoutMs / 1000)}s——卡在这一步，可继续`
-      emit({ type: "step/timeout", step: steps, timeoutMs: guard.stepTimeoutMs })
       break
     }
 
@@ -543,8 +451,8 @@ export async function runTurn(o: TurnOptions): Promise<TurnResult> {
       } else {
         const res = await executeTool(pre.tool!, args, {
           workspace: o.workspace,
-          // 单步超时也要能掐断工具：否则卡在一条命令上时，"停止/超时"都不管用
-          signal: stepSig.signal,
+          // 用户点停止也能掐断工具：否则卡在一条命令上时"停止"就不管用了
+          signal: o.signal,
           cfg: o.cfg,
           log: o.log,
         })
@@ -563,7 +471,6 @@ export async function runTurn(o: TurnOptions): Promise<TurnResult> {
         })
         o.onTool?.(c.name, args, res, "")
         stopTool()
-        if (res.ok) progressedThisStep = true // 进展 = 真做成了事，不只是"说了一段话"
         if (!res.ok) {
           failedTools += 1
           telemetry.count("tool.failed", 1, { tool: c.name })
@@ -583,20 +490,6 @@ export async function runTurn(o: TurnOptions): Promise<TurnResult> {
       // 工具执行结束
     }
 
-    /* 单步超时也可能是在**工具执行**阶段到的（模型请求那一段已在上面对过）。
-       放在 step/end 之前判，这一步才算如实收尾。 */
-    if (stepTimedOut()) {
-      stopReason = "timeout"
-      note = `第 ${steps} 步超过单步时限 ${Math.round(guard.stepTimeoutMs / 1000)}s——卡在这一步，可继续`
-      emit({ type: "step/timeout", step: steps, timeoutMs: guard.stepTimeoutMs })
-      break
-    }
-
-    clearTimeout(stepTimer)
-    stepSig.dispose()
-    // 无进展计数：本步一个工具都没做成 → 空转 +1；做成了 → 归零
-    if (progressedThisStep) stepsSinceProgress = 0
-    else stepsSinceProgress += 1
     emit({ type: "step/end", step: steps })
   }
 

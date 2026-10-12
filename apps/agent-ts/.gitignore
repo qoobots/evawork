@@ -1,0 +1,3 @@
+# 原生模块的构建产物（源码与 binding.gyp 入库，产物不入库：它是平台相关的二进制）
+native/*/build/
+native/*/*.node
