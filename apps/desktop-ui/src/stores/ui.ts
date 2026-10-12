@@ -286,8 +286,14 @@ export const useUiStore = defineStore('ui', {
            会在每次重启后"复活"——用户删了会话，重启一看任务又全回来了。 */
         const remoteIds = new Set(remote.map((r) => r.id));
         const out: UiTask[] = [];
+        /* 本地只留**远端还没有的临时条目**（`t-`）。
+           远端已有的 id 一律以远端那条为准：本地与远端同 id 各留一条，
+           侧栏就会出现"同一条任务既在工作区分组、又在「默认」组"
+           （本地那条没带上 work_dir，于是落进兜底桶）。
+           `ts-` 条目不在远端 = 会话文件已被删，一并剔除，
+           否则影子列表里的幽灵条目会在每次重启后复活。 */
         for (const t of this.tasks) {
-          if (!isTsTaskId(t.id) || remoteIds.has(t.id)) out.push(t);
+          if (!isTsTaskId(t.id) && !remoteIds.has(t.id)) out.push(t);
         }
         for (const r of remote) out.push(toUiTask(r));
         this.tasks = out;
@@ -303,8 +309,11 @@ export const useUiStore = defineStore('ui', {
     async retitleTask(id: string, title: string) {
       const clean = title.trim();
       if (!clean) return;
-      // TS 会话后端查不到，改名只落本地（发过去只会失败）
-      if (!isTsTaskId(id)) await renameTaskApi(id, clean);
+      /* 真实会话（`ts-`）的改名必须落进会话日志：侧栏刷新以会话目录为准，
+         标题取最后一条改名记录。只改本地的话，下一次 refreshTasks 就会把这次改名
+         丢掉（那条本地条目已按 id 去重、以远端为准被剔除）。
+         临时条目（`t-`，会话还没落盘）不发：发过去会在会话目录里凭空建一个文件。 */
+      if (isTsTaskId(id)) await renameTaskApi(id, clean);
       const t = this.tasks.find((x) => x.id === id);
       if (t) t.title = clean;
       this.persist();
