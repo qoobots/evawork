@@ -1,6 +1,6 @@
 ---
 name: codebase-exploration
-description: 在代码库里找东西、读代码、改代码的纪律
+description: 模型即将在代码库里搜索、阅读或修改文件时用它
 category: 工程实践
 source: EvaWork 自撰（依据 DSH fs-observation-policy 与 codex prompt 收敛）
 ---
@@ -11,21 +11,23 @@ source: EvaWork 自撰（依据 DSH fs-observation-policy 与 codex prompt 收�
 
 EvaWork 没有专门的文件工具，文件读写、列目录、搜内容、找文件、打补丁、删文件统一通过 `run_command` / `terminal` 发 shell 命令完成。
 
-| 要做的事 | 用 `run_command` / `terminal` 跑 | 别 |
+| 要做的事 | 用 `run_command` / `terminal` 跑（Windows） | 别 |
 |---|---|---|
-| 看文件内容 | `cat` / `type`（大文件加 `| head` / `sed -n`） | 在界面里裸手翻 |
-| 找文件（按名字） | `find` / `fd` / `dir /s` | 凭记忆猜路径 |
-| 搜内容（按正则） | `grep` / `rg` / `findstr` | 逐文件肉眼找 |
-| 看目录结构 | `ls` / `dir` / `tree` | 凭印象 |
+| 看文件内容 | `type` 文件；PowerShell 用 `Get-Content`/`gc`（大文件 `gc -TotalCount 50`） | 在界面里裸手翻 |
+| 找文件（按名字） | `dir /s /b 文件名` | 凭记忆猜路径 |
+| 搜内容（按正则） | `findstr /s /r "正则" *` | 逐文件肉眼找 |
+| 看目录结构 | `tree` / `dir /b /s` | 凭印象 |
+
+> 若运行环境附带 Git Bash / WSL，`grep` / `rg` / `fd` / `sed -n` 也可用，但优先上面原生命令。
 
 命令输出带行号、相对路径与命中上下文，后续引用和编辑都靠它。
-大文件用 `sed -n` / `head` / `tail` 截取相关段落，不要一次吞整个文件。
+大文件用 `gc -TotalCount N`（PowerShell）或 `more` 截取相关段落，不要一次吞整个文件。
 
 ## 先读后改
 
 - **读过的文件才有资格被编辑**。没读过就改是事故的头号来源。
-- 有针对性改动用**局部编辑**（`sed` / `python` / `patch` 等），不要整文件重写；重写前必须先读全文件。
-- 编辑完不要为了"确认"再重跑一遍——命令返回的结果就是事实。
+- 有针对性改动用**局部编辑**（PowerShell 用 `(Get-Content 文件) -replace` 或 `python`；有 Git Bash/WSL 时用 `sed` / `patch`），不要整文件重写；重写前必须先读全文件。
+- 编辑命令（sed/patch/-replace 等）的返回就是"改成功了"的事实，不必回头 `type` 一遍确认编辑动作本身；但改完后的**功能验证**（测试/构建/`git diff`）仍须按 `verification-before-completion` 重跑——上一次跑的是改动前的代码，证明不了改动后还对。
 
 ## 探索策略
 
@@ -45,3 +47,14 @@ EvaWork 没有专门的文件工具，文件读写、列目录、搜内容、找
 - 保持文件既有风格：命名、缩进、注释密度与周围代码一致。
 - 新代码要带齐它依赖的 import 与配置；不要引入没人要求的依赖。
 - 改完验证受影响的行为（配合 `verification-before-completion`）。
+
+## 何时应用
+
+出现以下任一时，本纪律全程生效：
+
+- 要在代码库里**找文件、搜内容、看目录结构**之前；
+- 要**阅读/理解**某段陌生代码、追调用链、查"为什么这么写"（`git log` / `git blame`）时；
+- 要**修改任何文件**之前与之后（先读后改、改完验证）；
+- 要**跨目录、跨命名约定做普查**时（委派只读子代理，别自己裸手翻）。
+
+一句话：只要智能体的手要伸向代码库，先走这套纪律，再动手。
