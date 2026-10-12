@@ -29,6 +29,7 @@
     },
     "files": [
       "src/**/*",
+      "data/**/*",
       "package.json"
     ],
     "asarUnpack": [
@@ -43,6 +44,10 @@
       {
         "from": "../skills",
         "to": "skills"
+      },
+      {
+        "from": "../built-in-skill",
+        "to": "built-in-skill"
       },
       {
         "from": "../agent-ts",

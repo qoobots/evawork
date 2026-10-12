@@ -10,6 +10,7 @@ import { egressFetch } from "./egress.ts"
 import { WorkspaceTerminal } from "./terminal.ts"
 import { McpClient, loadMcpConfig, mcpToolName } from "./mcp.ts"
 import type { McpServerConfig } from "./mcp.ts"
+import { builtinSkillList, loadSkillByName } from "./skills.ts"
 import type { ToolAction, ToolContext, ToolDef, ToolParam, ToolResult } from "./types.ts"
 
 const registry = new Map<string, ToolDef>()
@@ -287,6 +288,30 @@ defineTool({
         .replace(/\s{2,}/g, " ")
     }
     return { ok: true, output: truncate(text.trim(), max) }
+  },
+})
+
+// ---- 内置技能加载（对齐 Claude Code 的 Skill 工具）----
+// 系统提示里只注入技能"名称 + 描述"，正文在模型判定命中后由本工具按需加载进本轮，
+// 避免 15 个技能正文常驻吃掉上下文预算。
+
+defineTool({
+  name: "load_skill",
+  description:
+    "按名称加载一个技能的完整说明（SKILL.md 正文）。当任务与系统提示里列出的可用内置技能匹配时调用，把它的指令加载进本轮再按指示执行。参数 skill 为技能名（不含斜杠）。",
+  parameters: [
+    { name: "skill", type: "string", required: true, desc: "技能名，如 brainstorming、code-review" },
+  ],
+  action: "read",
+  async execute(args): Promise<ToolResult> {
+    const name = String(args.skill || "").trim()
+    if (!name) return { ok: false, error: "缺少 skill 参数" }
+    const body = loadSkillByName(name)
+    if (!body) {
+      const available = builtinSkillList().map((s) => s.name).join(", ")
+      return { ok: false, error: `没有这个技能：${name}。内置可用：${available}` }
+    }
+    return { ok: true, output: body }
   },
 })
 

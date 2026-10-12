@@ -195,6 +195,23 @@ function bundledSkillDir() {
   return path.resolve(__dirname, '..', '..', 'skills');
 }
 
+/**
+ * 随应用分发的"每段对话必带"内置技能子集（apps/built-in-skill / resources/built-in-skill）。
+ *
+ * 与 `apps/skills`（完整技能市场库）区分：这一份是经挑选、默认常驻的通用技能，
+ * 由 agent-ts 在系统提示里注入可用清单，并由 load_skill 按需加载正文。
+ * 调试可用 EVA_BUILTIN_SKILL_DIR 显式指定。
+ */
+function builtinSkillDir() {
+  const explicit = String(process.env.EVA_BUILTIN_SKILL_DIR || '').trim();
+  if (explicit && fs.existsSync(explicit)) return explicit;
+  if (process.resourcesPath) {
+    const p = path.join(process.resourcesPath, 'built-in-skill');
+    if (fs.existsSync(p)) return p;
+  }
+  return path.resolve(__dirname, '..', '..', 'built-in-skill');
+}
+
 /** 技能扫描根：返回 `{ path, scope, rank }`，已按 rank 升序（= 优先级降序）。 */
 function skillRoots(workspace) {
   const ws = path.resolve(String(workspace || ''));
@@ -207,6 +224,7 @@ function skillRoots(workspace) {
     env
       ? { path: env, scope: 'custom', rank: RANK.custom }
       : { path: path.join(os.homedir(), '.evawork', 'skills'), scope: 'user', rank: RANK.user },
+    { path: builtinSkillDir(), scope: 'builtin', rank: RANK.bundled },
     { path: bundledSkillDir(), scope: 'builtin', rank: RANK.bundled },
   ];
   return roots

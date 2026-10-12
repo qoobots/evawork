@@ -10,6 +10,7 @@
 //   - 调用方可以整节替换（比如产品想改汇报风格，只换 `output` 一节）。
 
 import { renderRulesSection } from "./rules.ts"
+import { builtinSkillsSection } from "./skills.ts"
 
 export interface PromptContext {
   workspace: string
@@ -80,6 +81,12 @@ export const defaultSections: PromptSection[] = [
           : null,
         "工具返回失败时先读错误原因再决定下一步，盲目重试只会重复失败。", 
       ]),
+  },
+  {
+    // 内置技能清单：每段对话都注入"名称 + 一句话描述"（正文按需由 load_skill 加载）。
+    // 空 → 整节消失（TS-040 约定）。
+    id: "skills",
+    render: () => builtinSkillsSection(),
   },
   {
     id: "output",
