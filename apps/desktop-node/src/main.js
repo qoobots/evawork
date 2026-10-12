@@ -33,6 +33,7 @@ const store = require('./store');
 const catalog = require('./catalog');
 const automations = require('./automations');
 const mcp = require('./mcp');
+const { detectSystemBrowser } = require('./browser-detect');
 const worktree = require('./worktree');
 const { TsAgentHost } = require('./tsAgent');
 
@@ -985,6 +986,16 @@ function setupBrowserIpc() {
       shotsDir: dir,
       shots,
     };
+  });
+  /* 系统浏览器探测：Playwright 类 MCP 服务装好之后要"驱动哪个浏览器"。
+     探测不到就是探测不到（如实返回 browser:null），不猜一个路径回去——
+     交给 Playwright 的默认逻辑，它会尝试用自带 Chromium（本机没装则由它自己下载）。 */
+  ipcMain.handle('evawork:browser-detect', async (_e, a) => {
+    try {
+      return await detectSystemBrowser((a && a.force) === true);
+    } catch (err) {
+      return { ok: false, reason: String((err && err.message) || err), browser: null, executablePath: null, available: [] };
+    }
   });
   /* 截图内容：渲染层要的是能直接塞进 <img src> 的东西。
      以前是后端给一个 URL；现在没有后端，就直接给 data URL。 */

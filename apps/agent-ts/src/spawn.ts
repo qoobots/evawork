@@ -37,6 +37,14 @@ function mcpBundleNodeModules(): string {
   const explicit = process.env.EVA_MCP_BUNDLE
   if (explicit && fs.existsSync(explicit)) return explicit
   const agentDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
+  /* dev 态要用 **materialize 的实体化产物**（apps/desktop-node/.mcp-bundle/node_modules，
+     由 pnpm pack/dist 前的 materialize_deps.mjs 生成，与打包后的 resources/mcp-bundle 同构）。
+     不能指向 apps/mcp-bundle/node_modules：那是 pnpm 的**符号链接布局**，顶层只有
+     @evawork/* 薄包，第三方包（@playwright/mcp 等）全在 .pnpm 里——tryLocalNpx
+     按顶层路径找永远落空，于是退化成 npx 走网络，冷启几十秒，把 MCP 启动预算
+     全部吃光。打包态 resources/ 下没有 desktop-node，自然回退到同级 mcp-bundle。 */
+  const dev = path.join(path.dirname(agentDir), "desktop-node", ".mcp-bundle", "node_modules")
+  if (fs.existsSync(dev)) return dev
   return path.join(path.dirname(agentDir), "mcp-bundle", "node_modules")
 }
 

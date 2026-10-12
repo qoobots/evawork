@@ -183,7 +183,10 @@ async function tools(id, refresh = false) {
 }
 
 /* 本地已分发的 MCP 服务在哪（见 agent-ts/src/spawn.ts，两边必须一致）。
-   优先 EVA_MCP_BUNDLE 显式指定；否则打包态用 process.resourcesPath，开发态用同级目录。 */
+   优先 EVA_MCP_BUNDLE 显式指定；打包态用 process.resourcesPath；
+   开发态用 materialize 的**实体化产物**（.mcp-bundle，与打包同构）——
+   不能用 apps/mcp-bundle/node_modules：那是 pnpm 符号链接布局，顶层只有
+   @evawork/* 薄包，第三方包全在 .pnpm 里，按包名找不到（详见 spawn.ts）。 */
 function mcpBundleNodeModules() {
   const explicit = process.env.EVA_MCP_BUNDLE;
   if (explicit && fs.existsSync(explicit)) return explicit;
@@ -191,6 +194,8 @@ function mcpBundleNodeModules() {
     const p = path.join(process.resourcesPath, 'mcp-bundle', 'node_modules');
     if (fs.existsSync(p)) return p;
   }
+  const dev = path.resolve(__dirname, '..', '.mcp-bundle', 'node_modules');
+  if (fs.existsSync(dev)) return dev;
   return path.resolve(__dirname, '..', '..', 'mcp-bundle', 'node_modules');
 }
 

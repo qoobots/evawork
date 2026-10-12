@@ -11,6 +11,7 @@
  *   - 刻意不拿"看起来差不多"的本地启发式去顶替推荐/评测：那类结果看着有、
  *     实际不对，比直接说做不到更容易误导人。
  */
+import { planBrowserForSpec } from './system-browser';
 
 export interface CatalogItem {
   name: string;
@@ -251,8 +252,14 @@ export async function installPluginItem(
     payload.args = cur.concat(b.args);
   }
   if (b.env && Object.keys(b.env).length) payload.env = b.env;
+  /* 浏览器类插件（Playwright）：把"驱动系统 Edge/Chrome"以 env 写进服务配置，
+     它就不用再去下载/依赖自带的 Chromium。用户自己填的 env 优先，所以放在下层。 */
+  const plan = await planBrowserForSpec(String(b.spec || '').trim());
+  if (Object.keys(plan.env).length) {
+    payload.env = { ...plan.env, ...((payload.env as Record<string, string>) || {}) };
+  }
   const r = must(await bridge('mcpCreate')!(payload), '安装插件');
-  return { installed: true, name, server_id: r.item?.id };
+  return { installed: true, name, server_id: r.item?.id, browser: plan.browser, browser_notice: plan.notice };
 }
 
 /** 评分存本机（store 的 ratings 集合），主进程读目录时会合并进条目。 */

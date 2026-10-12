@@ -62,6 +62,8 @@ contextBridge.exposeInMainWorld('evawork', {
   browserState: () => ipcRenderer.invoke('evawork:browser-state'),
   /** 取一张自动截图，返回可直接给 <img src> 的 data URL。 */
   browserShot: (name) => ipcRenderer.invoke('evawork:browser-shot', name),
+  /** 探测系统里已装的 Edge/Chrome：给 Playwright 类 MCP 选浏览器，免得随包带内核。 */
+  browserDetect: (a) => ipcRenderer.invoke('evawork:browser-detect', a),
   /** S-25：BYOK 自定义通道（Key 只存本机，列表只回显后 4 位）。 */
   providersList: () => ipcRenderer.invoke('evawork:providers-list'),
   providersAdd: (draft) => ipcRenderer.invoke('evawork:providers-add', draft),

@@ -110,7 +110,7 @@ export async function serve(opts: ServeOptions): Promise<void> {
         workspace,
         log: s.log,
         systemPrompt: booted.prompt,
-        tools: booted.tools,
+        tools: booted.exposedTools(),
         signal: s.controller.signal,
         onEvent: (e: SessionEvent) => notify("session.event", { sessionId: s.id, event: e }),
         /* 流式正文**不落事件日志**：一条一个 token，落盘会把日志撑爆，
@@ -186,7 +186,8 @@ export async function serve(opts: ServeOptions): Promise<void> {
     const messages: Message[] = [{ role: "system", content: booted.prompt.build(ctx) }]
     if (history.length) messages.push(...compactMessages(history).messages)
     // 与 loop 用同一份"真正暴露出去的工具"（清单里关掉的模块不该算进用量）
-    const visible = allTools().filter((t) => booted.tools.includes(t.name))
+    const exposed = new Set(booted.exposedTools())
+    const visible = allTools().filter((t) => exposed.has(t.name))
     return computeContextUsage({ system: booted.prompt, promptCtx: ctx, tools: visible, messages })
   }
 

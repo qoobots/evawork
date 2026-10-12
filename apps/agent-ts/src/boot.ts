@@ -85,8 +85,11 @@ export function loadManifest(file?: string): BootManifest {
 export interface BootedRuntime {
   manifest: BootManifest
   prompt: SystemPrompt
-  /** 真正暴露给模型的工具名（已剔除 exclude） */
+  /** boot 时刻的名单**快照**。MCP 慢服务超预算后走后台补装，不在这里——
+   *  给模型传工具名单请用 exposedTools()，用快照会让后装的工具永远不可用。 */
   tools: string[]
+  /** **当前**暴露名单：每次取都重算。MCP 后台补装完成后立刻可见。 */
+  exposedTools(): string[]
   /** MCP 接上了几个工具 */
   mcpTools: number
   /** 收尾：关掉 MCP 子进程 */
@@ -123,12 +126,18 @@ export async function applyManifest(m: BootManifest): Promise<BootedRuntime> {
   for (const [mod, names] of Object.entries(MODULE_TOOLS)) {
     if (!m.modules[mod as keyof BootManifest["modules"]]) for (const n of names) excluded.add(n)
   }
-  const tools = allTools().map((t) => t.name).filter((n) => !excluded.has(n))
+  /* 每次取都重算，而不是返回一份快照：MCP 服务握手超过总预算时会**继续在后台
+     补装**（tools.ts 的 installMcpTools），装完的工具进的是全局注册表——
+     快照是 boot 时刻的 allTools()，后台补装的那批永远进不去。实测后果：
+     dev 下 npx 冷启慢，62 个 MCP 工具全部 late，模型只看到 8 个内置工具，
+     用户问"帮我操作浏览器"得到"我没有这个能力"。 */
+  const exposedTools = (): string[] => allTools().map((t) => t.name).filter((n) => !excluded.has(n))
 
   return {
     manifest: m,
     prompt,
-    tools,
+    tools: exposedTools(),
+    exposedTools,
     mcpTools,
     stop: stopMcp,
   }

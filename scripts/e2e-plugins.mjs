@@ -81,7 +81,10 @@ check(
    还看着像"已经装上了"。这里把 execPath 临时换成真的 electron.exe 复现该条件。
    位置刻意放在其它握手之前：运行时选择有缓存，第一次算出是哪份 node 就定下来了。
    用已分发的包跑，不依赖 npm 下载。 */
-const BUNDLE = path.join(REPO, 'apps', 'mcp-bundle', 'node_modules');
+/* 本地分发要测的是 **materialize 的实体化产物**（.mcp-bundle，与打包后的
+   resources/mcp-bundle 同构）。apps/mcp-bundle/node_modules 是 pnpm 符号链接
+   布局，顶层没有第三方包，用它测会永远 SKIP，测不出真实解析结果。 */
+const BUNDLE = path.join(REPO, 'apps', 'desktop-node', '.mcp-bundle', 'node_modules');
 const LOCAL_PKG = '@playwright/mcp';
 const ELECTRON_EXE = path.join(REPO, 'apps', 'desktop-node', 'node_modules', 'electron', 'dist', 'electron.exe');
 if (!fs.existsSync(path.join(BUNDLE, LOCAL_PKG))) {

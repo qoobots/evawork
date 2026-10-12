@@ -165,7 +165,7 @@ async function main(): Promise<void> {
     workspace,
     log,
     systemPrompt: booted.prompt,
-    tools: booted.tools,
+    tools: booted.exposedTools(),
     signal: controller.signal,
     onText: (s) => { if (!json) process.stdout.write(s) },
     onTool: (name, args, r) => {

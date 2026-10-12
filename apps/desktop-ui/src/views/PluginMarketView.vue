@@ -47,7 +47,15 @@ import {
   type MCPTool,
   type TelemetrySummary,
   type TraceRow,
+  patchMcpEnv,
 } from '@/api/plugins';
+import {
+  detectSystemBrowser,
+  browserKindOf,
+  browserEnvOf,
+  type SystemBrowserInfo,
+} from '@/api/system-browser';
+import { tsAgentRestart } from '@/api/tsAgent';
 import { useAsyncData } from '@/composables/useAsyncData';
 import { useEscape } from '@/composables/useEscape';
 import { useI18nStore } from '@/stores/i18n';
@@ -310,6 +318,8 @@ const installTools = ref<MCPTool[]>([]);
 const installDone = ref(false);
 const toolsExpanded = ref(false);
 const installIntegrity = ref('');
+/** 浏览器类插件（Playwright）装完后告知"驱动哪个浏览器 / 需不需要下载内核"。 */
+const installBrowserNotice = ref('');
 // 部分真实 MCP server 必须带参数/令牌（如 Sentry）；令牌只用于本次安装请求，不写入目录
 const extraArgs = ref('');
 const extraEnv = ref('');
@@ -356,6 +366,7 @@ function openInstall(item: CatalogItem) {
   installDone.value = !!installed.value?.[item.name];
   toolsExpanded.value = false;
   installIntegrity.value = '';
+  installBrowserNotice.value = '';
   extraArgs.value = '';
   extraEnv.value = '';
 }
@@ -398,6 +409,7 @@ async function doInstall() {
     installTools.value = (res.tools as MCPTool[]) || [];
     installScan.value = (res as unknown as { scan?: SecurityScan }).scan || null;
     installIntegrity.value = String((res as unknown as { integrity?: string }).integrity || '');
+    installBrowserNotice.value = String((res as unknown as { browser_notice?: string }).browser_notice || '');
     installDone.value = true;   // 按钮变「已安装」并禁用
     toolsExpanded.value = false; // 工具清单默认折叠
     await reloadAll();
@@ -501,11 +513,76 @@ async function openManage() {
     installedPlugins.value = await fetchInstalledPlugins();
     await loadTelemetry();
     await loadTracing();
+    // 浏览器类服务的"用哪个浏览器/无头"开关要按本机实际情况给选项，开面板时探一次
+    browserInfo.value = await detectSystemBrowser();
     manageOpen.value = true;
   } catch (e) {
     manageErr.value = (e as Error).message;
   } finally {
     manageBusy.value = false;
+  }
+}
+
+/* ---------- 浏览器类 MCP：用系统 Edge/Chrome，并可切无头/有头 ---------- */
+const browserInfo = ref<SystemBrowserInfo>({ browser: null, available: [] });
+const browserSaving = ref('');
+const browserMsg = ref('');
+/** 改过但还没重启智能体的服务名 → 界面提示"重启后生效" */
+const browserDirty = ref<Record<string, boolean>>({});
+
+const BROWSER_LABEL: Record<string, string> = { msedge: '系统 Edge', chrome: '系统 Chrome' };
+
+/** 只有"要驱动真实浏览器"的服务才显示这一行（判定见 api/system-browser）。 */
+function mcpBrowserKind(p: InstalledPlugin) {
+  return browserKindOf([p.command, ...(p.args || [])].join(' '));
+}
+function browserOptions(): { browser: string; label: string }[] {
+  const seen = new Set<string>();
+  const out: { browser: string; label: string }[] = [];
+  for (const a of browserInfo.value.available || []) {
+    if (seen.has(a.browser)) continue;
+    seen.add(a.browser);
+    out.push({ browser: a.browser, label: BROWSER_LABEL[a.browser] || a.browser });
+  }
+  const cur = String(browserInfo.value.browser || '');
+  if (cur && !seen.has(cur)) out.push({ browser: cur, label: BROWSER_LABEL[cur] || cur });
+  return out;
+}
+function curBrowser(p: InstalledPlugin): string {
+  return String((p.env || {}).PLAYWRIGHT_MCP_BROWSER || browserInfo.value.browser || '');
+}
+function curHeadless(p: InstalledPlugin): boolean {
+  return Object.prototype.hasOwnProperty.call(p.env || {}, 'PLAYWRIGHT_MCP_HEADLESS');
+}
+
+async function doSetBrowser(p: InstalledPlugin, browser: string, headless: boolean) {
+  browserSaving.value = p.name;
+  browserMsg.value = '';
+  try {
+    const env = { ...(p.env || {}) };
+    // 先清掉浏览器这两个键，再按新选择写入：无头是"有没有这个键"，不能残留
+    delete env.PLAYWRIGHT_MCP_BROWSER;
+    delete env.PLAYWRIGHT_MCP_HEADLESS;
+    Object.assign(env, browserEnvOf('playwright', browser, headless));
+    await patchMcpEnv(p.server_id, env);
+    installedPlugins.value = { ...installedPlugins.value, [p.name]: { ...p, env } };
+    browserDirty.value = { ...browserDirty.value, [p.name]: true };
+    browserMsg.value = `${p.name}：已保存（${BROWSER_LABEL[browser] || browser}，${headless ? '无头' : '有头'}）`;
+  } catch (e) {
+    browserMsg.value = `${p.name}：${(e as Error).message}`;
+  } finally {
+    browserSaving.value = '';
+  }
+}
+
+async function doRestartAgent() {
+  browserMsg.value = '正在重启智能体…';
+  const r = await tsAgentRestart();
+  if (r.ok) {
+    browserDirty.value = {};
+    browserMsg.value = '智能体已重启，浏览器设置生效';
+  } else {
+    browserMsg.value = `重启失败：${r.reason || '未知原因'}`;
   }
 }
 
@@ -1361,6 +1438,7 @@ const artBg: Record<string, string> = {
             <UIcon name="check" :size="13" />
             <b>安装成功</b>，已注册 {{ installTools.length }} 个工具到工具注册表，可在对话中直接调用。
             <p class="im-hint">来源：{{ installTarget?.spec || spec }}；完整性：{{ installIntegrity }}<template v-if="installScan?.risk && installScan.risk !== 'safe'">；扫描：{{ scanRiskLbl(installScan) }}</template></p>
+            <p v-if="installBrowserNotice" class="im-hint">浏览器：{{ installBrowserNotice }}</p>
             <button class="ua-btn" @click="toolsExpanded = !toolsExpanded">
               {{ toolsExpanded ? '收起工具清单' : `查看工具清单（${installTools.length}）` }}
             </button>
@@ -1426,6 +1504,33 @@ const artBg: Record<string, string> = {
                 </span>
                 <span v-if="!(p.capabilities || []).length" class="mg-cap warn">未声明能力</span>
               </div>
+              <!-- 浏览器类服务：驱动系统 Edge/Chrome，并可切无头/有头。
+                   用 env 下发（服务进程启动时读取），所以改完要重启智能体才生效。 -->
+              <div v-if="mcpBrowserKind(p) === 'playwright'" class="mg-src">
+                <span class="fld-t">浏览器</span>
+                <select
+                  class="sort-sel"
+                  :value="curBrowser(p)"
+                  :disabled="browserSaving === p.name"
+                  @change="doSetBrowser(p, ($event.target as HTMLSelectElement).value, curHeadless(p))"
+                >
+                  <option v-for="o in browserOptions()" :key="o.browser" :value="o.browser">{{ o.label }}</option>
+                </select>
+                <label class="mg-check">
+                  <input
+                    type="checkbox"
+                    :checked="curHeadless(p)"
+                    :disabled="browserSaving === p.name"
+                    @change="doSetBrowser(p, curBrowser(p), ($event.target as HTMLInputElement).checked)"
+                  />
+                  无头（不弹窗口）
+                </label>
+                <span v-if="browserDirty[p.name]" class="plug-badge upd">需重启智能体</span>
+              </div>
+              <div v-else-if="mcpBrowserKind(p) === 'chrome-devtools'" class="mg-src">
+                <span class="fld-t">浏览器</span>
+                <span class="mg-src-name">官方只支持 Google Chrome，由它自己查找</span>
+              </div>
               <div class="mg-acts">
                 <button class="ua-btn" @click="manageToggle(p.name, !p.enabled)">{{ p.enabled ? '停用' : '启用' }}</button>
                 <button class="ua-btn" @click="toggleTools(p.name)">{{ toolsOpen === p.name ? '收起工具' : '工具' }}</button>
@@ -1455,6 +1560,11 @@ const artBg: Record<string, string> = {
                 </div>
               </div>
             </div>
+          </div>
+          <!-- 浏览器设置改完要重启智能体：env 是进程启动时读的，改配置不会重开子进程 -->
+          <div v-if="browserMsg || Object.keys(browserDirty).length" class="mg-browser-bar">
+            <span class="im-hint">{{ browserMsg || '浏览器设置已改，重启智能体后生效' }}</span>
+            <button class="ua-btn" @click="doRestartAgent()">重启智能体</button>
           </div>
           <!-- T-142 / T14：安全边界评测流水线（回归） -->
           <div class="mg-telemetry">
@@ -1653,6 +1763,11 @@ const artBg: Record<string, string> = {
 .mg-src { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
 .mg-src .fld-t { color: var(--t3); font-size: 12px; }
 .mg-src-name { font-weight: 600; font-size: 13px; }
+/* 浏览器类服务的"无头/有头"开关 */
+.mg-check { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--t2); cursor: pointer; user-select: none; }
+.mg-check input { accent-color: var(--brand, #2b6cff); }
+.mg-browser-bar { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.mg-browser-bar .im-hint { flex: 1; }
 .act-err {
   display: flex; align-items: center; gap: 8px; margin: 12px 0 0;
   padding: 10px 12px; border-radius: 8px; background: var(--err-bg); color: var(--err); font-size: 12.5px;
