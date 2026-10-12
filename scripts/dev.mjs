@@ -63,8 +63,6 @@ const uiDir = path.join(root, 'apps', 'desktop-ui');
    主进程自己已经不依赖 18765 了。dev 与打包态行为对齐：都不再起后端。
    （`BACKEND` 地址仍会注入渲染层——渲染层那批尚未迁移的数据接口还在用它，
      没后端时它们会各自报错，这正是待办清单。） */
-console.log('[dev] backend  -> 不拉起（已废弃；主进程不再依赖它）');
-
 console.log(`[dev] ui       -> ${UI_URL}`);
 // 直接 `node vite/bin/vite.js`（等价于 desktop-ui 的 dev 脚本 `vite`），
 // 不走 `pnpm -F ... dev`——pnpm 是 .cmd，不经 cmd.exe 起不来。
