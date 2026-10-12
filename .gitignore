@@ -3,6 +3,17 @@ dist/
 target/
 .DS_Store
 *.local
+# IDE 工作区（JetBrains：本机运行配置、窗口布局、模块索引，不入库）
+.idea/
+*.iml
+# CodeBuddy 工作区数据（本机记忆与索引，不入库）。
+# 注意：.codebuddy/rules/ 下的规则若要团队共享，改成下面两行：
+#   .codebuddy/*
+#   !.codebuddy/rules/
+.codebuddy/
+# trace 分析的输出目录（scripts/{cc,ev}-trace-analyze.mjs 的产物，可随时删了重跑）
+scripts/cc-out/
+scripts/ev-out/
 # 密钥与本地配置：绝不入库（模型 API Key 放 .env.local）
 .env
 .env.*
@@ -20,3 +31,8 @@ apps/desktop-node/.mcp-bundle/
 *.tlog
 native/**/build/
 *.node
+# Playwright MCP 的工作目录：驱动浏览器时落在当前工作目录（仓库根或 desktop-node 下）
+.playwright-mcp/
+# dev 脚本的启动日志（scripts/dev.mjs 每次启动重写）
+dev-relaunch.log
+dev-relaunch.err

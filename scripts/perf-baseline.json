@@ -1,0 +1,35 @@
+{
+  "measuredAt": "2026-09-25T02:08:51.676Z",
+  "environment": {
+    "headless": true,
+    "viewport": "1280x820",
+    "runs": 3
+  },
+  "coldLoad": {
+    "ttfb": 11,
+    "domContentLoaded": 92,
+    "load": 203,
+    "fcp": 224,
+    "lcp": 272
+  },
+  "routeMountMs": {
+    "/": 27,
+    "/office": 12,
+    "/market": 31,
+    "/templates": 6,
+    "/design": 33,
+    "/design/system-tiktok": 5,
+    "/automation": 16,
+    "/files": 11,
+    "/admin/usage": 7,
+    "/admin/account": 11,
+    "/admin/subscription": 29,
+    "/admin/dashboard": 12,
+    "/admin/favorites": 4,
+    "/admin/rules": 31,
+    "/admin/commands": 5,
+    "/admin/integrations": 32,
+    "/admin/cloud-env": 14,
+    "/admin/mcp": 14
+  }
+}

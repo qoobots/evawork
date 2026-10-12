@@ -12,9 +12,7 @@
   },
   "scripts": {
     "start": "node src/cli.ts",
-    "smoke": "node src/cli.ts --prompt \"用 run_command 看一下当前工作区，只回答你看到了什么\"",
-    "build:native": "node scripts/build-native.mjs",
-    "build:native:force": "node scripts/build-native.mjs --force"
+    "smoke": "node src/cli.ts --prompt \"用 run_command 看一下当前工作区，只回答你看到了什么\""
   },
   "//": "2026-10-06 起允许引入 npm 依赖（原「零 npm 依赖」约束作废，见 .docs/09）。选包偏好纯 JS / 无原生编译，避免打包复杂化。Node 22.18+ 原生剥离 TS 类型即可直接运行 .ts；HTTP 用内置 fetch，流式用手写 SSE 解析。",
   "dependencies": {

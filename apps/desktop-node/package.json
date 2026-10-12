@@ -8,7 +8,6 @@
     "start": "electron .",
     "dev": "electron .",
     "bundle:python": "python ../../scripts/bundle_python.py",
-    "build:agent-native": "node ../agent-ts/scripts/build-native.mjs",
     "pack": "node ../../scripts/materialize_deps.mjs ../agent-ts/node_modules .agent-deps/node_modules && node ../../scripts/materialize_deps.mjs ../mcp-bundle/node_modules .mcp-bundle/node_modules && python ../../scripts/bundle_python.py && electron-builder --dir",
     "dist": "node ../../scripts/materialize_deps.mjs ../agent-ts/node_modules .agent-deps/node_modules && node ../../scripts/materialize_deps.mjs ../mcp-bundle/node_modules .mcp-bundle/node_modules && python ../../scripts/bundle_python.py && electron-builder --win nsis portable",
     "pack:dir": "node ../../scripts/materialize_deps.mjs ../agent-ts/node_modules .agent-deps/node_modules && node ../../scripts/materialize_deps.mjs ../mcp-bundle/node_modules .mcp-bundle/node_modules && electron-builder --dir"
@@ -53,9 +52,6 @@
           "package.json",
           "README.md",
           "scripts/**/*",
-          "native/win-sandbox/binding.gyp",
-          "native/win-sandbox/src/**/*",
-          "native/win-sandbox/build/Release/*.node",
           "!node_modules/**/.bin/**",
           "!node_modules/**/*.map",
           "!node_modules/**/test/**",

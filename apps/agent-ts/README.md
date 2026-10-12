@@ -52,16 +52,8 @@ export EVA_AI_TOKEN=<EVA 登录令牌>
 node src/cli.ts --prompt "用 list_dir 看一下工作区，然后一句话说明"
 ```
 
-自检（不需要模型）：
-
-```bash
-node src/selftest.ts      # 198 项：事件日志 seq 连续性、沙箱越界、审批 fail-closed、受限令牌
-node src/selftest-sdk.ts  # 22 项：JSON-RPC 握手、能力清单、错误码
-node src/cli.ts --sandbox-status   # 受限令牌那层生效了吗（TS-056，不需要模型）
-```
-
 CLI 选项：`--model` `--workspace` `--policy ask|never` `--interactive`
-`--session`（续跑）`--json` `--sessions`（历史）`--sandbox-status`。
+`--session`（续跑）`--json` `--sessions`（历史）。
 
 ## 目录
 
@@ -70,28 +62,15 @@ CLI 选项：`--model` `--workspace` `--policy ask|never` `--interactive`
 | `src/types.ts` | 公共类型（含审批档位、动作类别） |
 | `src/session.ts` | 事件日志：append-only JSONL + 独占目录锁（含陈旧锁兜底） |
 | `src/llm.ts` | OpenAI 兼容流式适配器；内部格式 → 线上格式的转换 |
-| `src/sandbox.ts` | 工作区路径约束（软沙箱） |
-| `src/sandbox-win.ts` | 受限令牌那层的加载器（可选）与状态查询 TS-056 |
 | `src/approval.ts` | 审批闸门：`ask` / `never`，无人应答 → deny |
 | `src/tools.ts` | 注册表 + `pre-execute` 管线 + 内置工具 |
 | `src/loop.ts` | 主循环 turn/step：协作式取消，收口靠墙钟与"有没有进展" |
 | `src/cli.ts` | 入口 |
-| `src/selftest.ts` | 自检（不需要模型） |
 
-## 可选的原生模块（Windows 受限令牌沙箱）
-
-`native/win-sandbox`：给 `run_command` 的子进程上**真正的写限制**（只能写工作区与私有
-temp）。它是全项目**唯一的原生模块**，且是**可选**的——默认关（`EVA_TS_WIN_SANDBOX=1` 开），
-缺了就明说原因并退回路径层沙箱，绝不假装限制生效。
-
-```bash
-npm run build:native          # 需要 MSVC Build Tools + Python；编不出来不阻断打包
-```
+沙箱约束走**契约档位**（`shared/agent-contract.json` 的 `sandbox` 表：每档的 write /
+network 开关），由 `src/contract.ts` 加载；没有原生受限令牌层。
 
 ## 当前边界
 
-- 受限令牌那层**只限写**，不限读与网络；且仍有程序起不来（实测 `git` / `ping` 报
-  0xC0000142，工具层已把它翻成人话而不是甩一串负数）
-- 原生模块是平台专属（只有 Windows）且要编译，装包环境不一定有
 - 工具的历史与会话查询都在本地 JSONL，规模变大后摘要需要索引（现在读全文够用）
 - 没有 HTTP 接口，只有 stdio 上的 JSON-RPC（界面经 `apps/desktop-node` 驱动）

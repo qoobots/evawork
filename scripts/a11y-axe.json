@@ -1,0 +1,26 @@
+{
+  "measuredAt": "2026-09-25T02:36:21.771Z",
+  "routes": 18,
+  "totalViolations": 0,
+  "byRule": {},
+  "perRoute": {
+    "/": [],
+    "/office": [],
+    "/market": [],
+    "/templates": [],
+    "/design": [],
+    "/design/system-tiktok": [],
+    "/automation": [],
+    "/files": [],
+    "/admin/usage": [],
+    "/admin/account": [],
+    "/admin/subscription": [],
+    "/admin/dashboard": [],
+    "/admin/favorites": [],
+    "/admin/rules": [],
+    "/admin/commands": [],
+    "/admin/integrations": [],
+    "/admin/cloud-env": [],
+    "/admin/mcp": []
+  }
+}
