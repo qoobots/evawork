@@ -1,6 +1,6 @@
 ---
 name: code-review
-description: 审查代码、评审改动、检查实现是否可靠
+description: 改完代码准备合入前、或接到"帮我看看这段/这次改动"的请求时，用它做有章法、可行动的代码评审
 category: 工程实践
 source: EvaWork 自撰
 
