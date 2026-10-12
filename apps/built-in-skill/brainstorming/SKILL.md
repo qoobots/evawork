@@ -2,7 +2,7 @@
 name: brainstorming
 description: 动手做之前把需求问清、方案定下来
 category: 流程与编排
-source: obra/superpowers
+source: obra/superpowers（中文改编）
 ---
 
 # 头脑风暴

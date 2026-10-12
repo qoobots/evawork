@@ -2,7 +2,7 @@
 name: test-driven-development
 description: 实现功能或修 bug 前先写测试、看着它失败
 category: 工程实践
-source: obra/superpowers
+source: obra/superpowers（中文改编）
 ---
 
 # 测试驱动开发（TDD）

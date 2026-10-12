@@ -2,7 +2,7 @@
 name: verification-before-completion
 description: 宣布做完了之前先拿验证证据
 category: 工程实践
-source: obra/superpowers
+source: obra/superpowers（中文改编）
 ---
 
 # 完成前先验证

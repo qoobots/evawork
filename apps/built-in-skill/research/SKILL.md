@@ -2,7 +2,7 @@
 name: research
 description: 针对高可信一手来源做调研并留下出处
 category: 工程实践
-source: mattpocock/skills
+source: mattpocock/skills（中文改编）
 ---
 
 

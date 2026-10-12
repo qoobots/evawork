@@ -2,7 +2,7 @@
 name: writing-plans
 description: 动手实现之前写实现计划
 category: 流程与编排
-source: obra/superpowers
+source: obra/superpowers（中文改编）
 ---
 
 # 写实现计划

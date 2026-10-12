@@ -2,7 +2,7 @@
 name: using-superpowers
 description: 开工前判断该用哪些技能、按什么顺序
 category: 流程与编排
-source: obra/superpowers
+source: obra/superpowers（中文改编）
 ---
 
 # 技能使用指南

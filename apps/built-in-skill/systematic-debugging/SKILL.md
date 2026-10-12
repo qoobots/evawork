@@ -2,7 +2,7 @@
 name: systematic-debugging
 description: 遇到 bug 时先找根因再改
 category: 工程实践
-source: obra/superpowers
+source: obra/superpowers（中文改编）
 ---
 
 # 系统化调试

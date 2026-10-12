@@ -2,7 +2,7 @@
 name: executing-plans
 description: 在当前会话里逐任务执行一份计划
 category: 流程与编排
-source: obra/superpowers
+source: obra/superpowers（中文改编）
 ---
 
 # 执行实现计划
