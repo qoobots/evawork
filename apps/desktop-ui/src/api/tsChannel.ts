@@ -39,19 +39,6 @@ export function tsSessionOf(taskId: string): string {
   return isTsTaskId(taskId) ? taskId : '';
 }
 
-/**
- * 通道静默上限（TS-066）：超过这么久**一帧都没收到**，就判定"通道没动静了"并停止等待。
- *
- * 它不是"任务超时"——任务自己的超时在 agent-ts 那边（单步 / 墙钟 / 无进展，
- * 见 `guard.ts` 与 `llm.ts`）。这里只管"通道本身失联"这一种情况：
- * 子进程没死但卡住、或终态帧没能送达渲染层时，原来那个 `await` 会**永久挂住**，
- * 界面就一直转圈，而任务其实早就不动了。
- *
- * 取值要容得下合法的长静默：命令工具最长 120s，模型流静默上限 60s，
- * 所以给 5 分钟——宁可晚一点报，也不能把正常任务误杀。
- */
-const CHANNEL_IDLE_MS = 300_000;
-
 /** 停止一轮（协作式：TS 侧在本步边界停下）。传任务页里的 taskId。 */
 export async function cancelTsAgentFor(taskId: string): Promise<void> {
   const sid = tsSessionOf(taskId);
@@ -103,17 +90,9 @@ export async function* streamTsTask(
   let ended = false;
   // 合并重复的 notice（如后端每步都推的"已压缩"）：相同文案只放一遍，避免执行过程里刷一屏。
   let lastNotice = '';
-  /** 通道静默计时器与它的触发标记（见 CHANNEL_IDLE_MS）。 */
-  let idleTimer: ReturnType<typeof setTimeout> | null = null;
-  let channelTimedOut = false;
-  const clearIdle = (): void => {
-    if (idleTimer) clearTimeout(idleTimer);
-    idleTimer = null;
-  };
   const finish = (): void => {
     if (ended) return;
     ended = true;
-    clearIdle();
     off();
     push(null);
   };
@@ -128,29 +107,13 @@ export async function* streamTsTask(
     yield { type: 'plan', steps: [stepOf('ts-1', 'TS 智能体执行中', 'running')] };
 
     for (;;) {
-      /* 每等一帧就重新上膛：只要通道还在动，就不算失联。 */
-      clearIdle();
+      /* **不设通道静默上限**：长任务（委派子代理跑满几分钟、长命令、长思考）本来就会
+         长时间一帧不发，按秒猜死活只会把正常任务误杀成"已停止等待"。
+         这一轮何时结束，只由 TS 侧的终态帧、停止信号与子进程退出决定。 */
       const p = queue.length
         ? queue.shift()!
-        : await Promise.race([
-            new Promise<TsAgentPayload | null>((res) => waiters.push(res)),
-            new Promise<TsAgentPayload | null>((res) => {
-              idleTimer = setTimeout(() => {
-                channelTimedOut = true;
-                res(null);
-              }, CHANNEL_IDLE_MS);
-            }),
-          ]);
-      if (!p) {
-        // 通道静默超时 ≠ 任务结束：如实说清"是等不到了"，别停在"执行中"
-        if (channelTimedOut) {
-          yield {
-            type: 'error',
-            message: `超过 ${Math.round(CHANNEL_IDLE_MS / 1000)}s 没有收到 TS 智能体的任何消息，已停止等待（任务可能仍在后台运行）`,
-          };
-        }
-        break;
-      }
+        : await new Promise<TsAgentPayload | null>((res) => waiters.push(res));
+      if (!p) break;
       if (p.sessionId && sessionId && p.sessionId !== sessionId) continue;
 
       if (p.kind === 'text') {
