@@ -29,6 +29,12 @@ export interface SessionSummary {
   steps: number
   /** 会话标题：改过名就是改名后的，否则取首个 turn 的目标（截断） */
   title: string
+  /** 父任务 id（根任务为 null）。来自 `session/meta`，旧会话按文件名 `-sub-<n>` 兜底 */
+  parentId: string | null
+  /** 层级种类：root / subtask / job（见 `SessionKind`） */
+  kind: "root" | "subtask" | "job"
+  /** 直接子任务数（仅根任务非零，用于侧栏聚合展示） */
+  childCount: number
 }
 
 /** 会话 id 只许这些字符——它会被拼进文件路径，不校验就是路径穿越。 */
@@ -89,6 +95,16 @@ function summarize(id: string, file: string): SessionSummary {
      没改过名就用首个目标的第一行——侧栏要的是一眼能认出来的短句。 */
   const renamed = [...events].reverse().find((e) => e.type === "session/renamed")
   const title = renamed ? String(renamed.title ?? "") : goal.split("\n")[0]
+  // 层级关系：优先读 `session/meta` 首行；旧会话没有则按文件名 `-sub-<n>` 兜底
+  const meta = events.find((e) => e.type === "session/meta") as
+    | { parentId?: string | null; kind?: string }
+    | undefined
+  let parentId: string | null = meta ? (meta.parentId ?? null) : null
+  let kind: "root" | "subtask" | "job" = meta ? ((meta.kind as string) === "job" ? "job" : (meta.kind as string) === "subtask" ? "subtask" : "root") : "root"
+  if (!parentId && /-sub-\d+$/.test(id)) {
+    parentId = id.replace(/-sub-\d+$/, "")
+    kind = "subtask"
+  }
   return {
     id,
     file,
@@ -100,6 +116,9 @@ function summarize(id: string, file: string): SessionSummary {
     stop: lastEnd ? String(lastEnd.stop ?? "") : "",
     steps: lastEnd ? Number(lastEnd.steps ?? 0) : 0,
     title,
+    parentId,
+    kind,
+    childCount: 0,
   }
 }
 
@@ -139,9 +158,14 @@ export function listSessions(): SessionSummary[] {
   } catch {
     return []
   }
-  return names
-    .map((n) => summarize(n.replace(/\.jsonl$/, ""), path.join(dir, n)))
-    .sort((a, b) => (b.lastTs || 0) - (a.lastTs || 0))
+  const all = names.map((n) => summarize(n.replace(/\.jsonl$/, ""), path.join(dir, n)))
+  // 统计每个父任务的子任务数（侧栏聚合展示用）
+  const childOf = new Map<string, number>()
+  for (const s of all) {
+    if (s.parentId) childOf.set(s.parentId, (childOf.get(s.parentId) || 0) + 1)
+  }
+  for (const s of all) s.childCount = childOf.get(s.id) || 0
+  return all.sort((a, b) => (b.lastTs || 0) - (a.lastTs || 0))
 }
 
 export function sessionEvents(id: string): SessionEvent[] {

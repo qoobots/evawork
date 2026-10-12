@@ -15,6 +15,7 @@ import {
   tsSessionDelete,
   tsSessionRename,
   tsSessions,
+  type TsSessionSummary,
 } from './tsAgent';
 
 export type StepStatus =
@@ -231,12 +232,20 @@ export interface TaskSummary {
   id: string;
   title: string;
   mode?: string;
-  state?: string;
+  state?: string
   error?: string;
   /** 任务创建时的工作区；空 = 老任务 → 界面归入「默认」组 */
-  work_dir?: string;
-  created_at?: number;
-  updated_at?: number;
+  work_dir?: string
+  created_at?: number
+  updated_at?: number
+  /** 父任务 id（根任务为 null）。24 号方案：把父子关系从文件名提升为结构化字段 */
+  parent_id?: string | null
+  /** 层级种类：root / subtask / job */
+  kind?: string
+  /** 直接子任务（嵌套），仅根任务可能非空 */
+  children?: TaskSummary[]
+  /** 子任务数量（仅根任务非零，侧栏聚合展示用） */
+  childCount?: number
 }
 
 /**
@@ -252,14 +261,21 @@ export interface TaskSummary {
 export async function fetchTaskList(): Promise<TaskSummary[]> {
   const res = await tsSessions();
   if (!res.ok) throw new Error(res.reason || '读取会话列表失败');
-  return (res.sessions || []).map((s) => ({
+  // 递归把后端返回的树（根 + 嵌套 children）映射成 TaskSummary 树；
+  // 后端默认只给根任务，子任务随父任务的 children 下来（24 号方案 G2）
+  const mapOne = (s: TsSessionSummary): TaskSummary => ({
     id: s.id,
     title: s.title || s.goal || s.id,
     // 会话没有"排队/规划/执行中"这类状态机，只看最后一轮怎么结束的
     state: sessionStopToState(s.stop),
     created_at: s.firstTs || undefined,
     updated_at: s.lastTs || undefined,
-  }));
+    parent_id: s.parentId ?? null,
+    kind: s.kind || 'root',
+    childCount: s.childCount || (s.children ? s.children.length : 0),
+    children: s.children && s.children.length ? s.children.map(mapOne) : undefined,
+  });
+  return (res.sessions || []).map(mapOne);
 }
 
 /** 最后一轮的结束原因 → 界面状态标签。认不出的按"已完成"处理并记录原文。 */

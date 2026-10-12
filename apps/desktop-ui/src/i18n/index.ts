@@ -35,6 +35,8 @@ const zh: Record<string, string> = {
   'tasks.default_group': '默认',
   'tasks.fold': '折叠分组',
   'tasks.unfold': '展开分组',
+  'tasks.hide_subtasks': '隐藏子任务',
+  'tasks.show_subtasks': '显示子任务',
   'tasks.running_kept': '有任务正在执行，已跳过',
 
   'menu.messages': '消息',
@@ -597,6 +599,8 @@ const en: Record<string, string> = {
   'tasks.default_group': 'Default',
   'tasks.fold': 'Collapse group',
   'tasks.unfold': 'Expand group',
+  'tasks.hide_subtasks': 'Hide subtasks',
+  'tasks.show_subtasks': 'Show subtasks',
   'tasks.running_kept': 'Running tasks were skipped',
 
   'menu.messages': 'Messages',

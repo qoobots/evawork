@@ -391,7 +391,7 @@ class TsAgentHost {
     } catch {
       return { ok: true, sessions: [] }; // 还没有任何会话
     }
-    const out = [];
+    const flat = [];
     for (const n of names) {
       const id = n.replace(/\.jsonl$/, '');
       const events = await readSessionEvents(path.join(dir, n));
@@ -401,7 +401,15 @@ class TsAgentHost {
       const lastEnd = [...events].reverse().find((e) => e && e.type === 'turn/end');
       const goal = first ? String(first.prompt || '') : '';
       const renamed = [...events].reverse().find((e) => e && e.type === 'session/renamed');
-      out.push({
+      // 层级关系：优先读 session/meta，旧会话按 `-sub-<n>` 文件名兜底（与 agent-ts query.ts 同逻辑）
+      const meta = events.find((e) => e && e.type === 'session/meta');
+      let parentId = meta ? (meta.parentId || null) : null;
+      let kind = meta ? String(meta.kind || 'root') : 'root';
+      if (!parentId && /-sub-\d+$/.test(id)) {
+        parentId = id.replace(/-sub-\d+$/, '');
+        kind = 'subtask';
+      }
+      flat.push({
         id,
         title: renamed ? String(renamed.title || '') : goal.split('\n')[0],
         goal,
@@ -410,10 +418,27 @@ class TsAgentHost {
         lastTs: tsList.length ? Math.max(...tsList) : 0,
         stop: lastEnd ? String(lastEnd.stop || '') : '',
         steps: lastEnd ? Number(lastEnd.steps || 0) : 0,
+        parentId,
+        kind,
+        children: [],
+        childCount: 0,
       });
     }
-    out.sort((a, b) => b.lastTs - a.lastTs); // 最近用的在最前
-    return { ok: true, sessions: out };
+    // 构建父子树：默认只把根任务放进列表，子任务作为 children 嵌套（24 号方案 G2）
+    const byId = new Map(flat.map((s) => [s.id, s]));
+    const roots = [];
+    for (const s of flat) {
+      if (s.parentId && byId.has(s.parentId)) {
+        byId.get(s.parentId).children.push(s);
+      } else {
+        roots.push(s);
+      }
+    }
+    for (const s of flat) s.childCount = s.children.length;
+    const byTs = (a, b) => b.lastTs - a.lastTs;
+    for (const s of roots) s.children.sort(byTs);
+    roots.sort(byTs); // 最近用的在最前
+    return { ok: true, sessions: roots, tree: true };
   }
 
   /** 改名：追加一条 `session/renamed` 事件（与 agent-ts renameSession 同形状）。 */

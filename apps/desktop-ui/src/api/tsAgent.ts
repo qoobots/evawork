@@ -71,6 +71,13 @@ export interface TsSessionSummary {
   lastTs: number;
   stop: string;
   steps: number;
+  /** 父任务 id（根任务为 null） */
+  parentId?: string | null;
+  /** 层级种类：root / subtask / job */
+  kind?: string;
+  /** 子任务（嵌套），仅根任务可能非空 */
+  children?: TsSessionSummary[];
+  childCount?: number;
 }
 
 export interface TsSessionListResult {

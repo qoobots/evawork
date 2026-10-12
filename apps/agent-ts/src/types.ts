@@ -14,33 +14,54 @@ export type Role = "system" | "user" | "assistant" | "tool"
 /**
  * 一个 turn 为什么停（TS-066）。
  *
- * 放在 `types.ts` 而不是 `loop.ts`：`guard.ts` 的停止条件也要用，而 `loop.ts`
- * 反过来要 import `guard.ts`——放 loop 里就成了循环依赖。
+ * 放在 `types.ts` 而不是 `loop.ts`：它跨模块共用（sdk / 会话日志 / 界面），
+ * 放 loop 里会让这些地方反过来依赖 loop。
  *
  * 分类是有代价的，界面据此决定给「继续」还是「重试」：
- *   - **预算/上限类**（deadline / timeout / stalled）→ 已产出的内容
- *     都还在上下文里，给「继续」（复用会话续跑），不给「重试」（那暗示从头重来）；
  *   - **真失败类**（error / cancelled）→ 给「重试」。
  *     guard 死循环不再作为 turn 级错误：同一工具同参数第 5 次会被跳过，并把阻塞信息
- *     作为工具结果喂给模型，让它自己换做法；最终停止原因通常是 deadline / stalled。
+ *     作为工具结果喂给模型，让它自己换做法。
  *
- * 没有"步数上限"这一类：跑多少步由模型按任务复杂度自己决定，预算按**时间**和
- * **有没有进展**收口，而不是按数到第几步。
+ * 没有"步数上限 / 墙钟 / 无进展"这几类：跑多少步、跑多久由模型按任务复杂度自己
+ * 决定，慢与长都不是失控，不再替用户"好心收尾"。
  */
 export type StopReason =
   | "completed"
-  /** 墙钟预算用尽 */
-  | "deadline"
-  /** 单个 step 超时（含模型请求挂住） */
-  | "timeout"
-  /** 连续多步无进展，判定空转 */
-  | "stalled"
   | "cancelled"
   | "error"
   /** 循环卫生：同一工具同一参数反复调用 */
   | "guard"
   /** 进程被杀/退出，本轮没跑完（由 sdk 的退出钩子补写，不来自 runTurn 内部） */
   | "killed"
+
+/**
+ * 会话（= 任务）的层级种类。
+ *
+ * 引入它是为了把"父任务 / 子任务"从**文件名约定**（`-sub-`）提升为**结构化字段**——
+ * 否则侧栏列表只能靠扫描目录、按后缀猜测谁是谁的孩子（`24` 号方案根因）。
+ * 旧会话没有这个字段，列表查询按文件名 `-sub-<n>` 兜底回退。
+ */
+export type SessionKind = "root" | "subtask" | "job"
+
+/**
+ * 会话元信息事件（`session/meta`）。
+ *
+ * 作为每条会话 JSONL 的**首行**写入（新建时），把层级关系、来源显式落盘：
+ *   - 父子关系由 `parentId` 表达，而不是靠文件位置或命名；
+ *   - `kind` 区分根任务与子任务，侧栏据此默认只展示根、可选展开子任务；
+ *   - 不重复存 goal/title：标题仍由既有 `turn/start` / `session/renamed` 推导。
+ */
+export interface SessionMetaEvent {
+  type: "session/meta"
+  id: string
+  /** 根任务为 null；子任务为其父会话 id */
+  parentId: string | null
+  kind: SessionKind
+  goal?: string
+  workDir?: string
+  model?: string
+  createdAt?: number
+}
 
 export interface ToolCall {
   id: string

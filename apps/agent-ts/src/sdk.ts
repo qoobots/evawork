@@ -141,7 +141,7 @@ export async function serve(opts: ServeOptions): Promise<void> {
 
   function newSession(): Session {
     const id = newSessionId()
-    const log = new SessionLog(id)
+    const log = new SessionLog(id, { kind: "root", workDir: opts.workspace })
     const s: Session = { id, log, controller: new AbortController(), running: false }
     sessions.set(id, s)
     return s

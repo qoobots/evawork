@@ -152,7 +152,9 @@ async function main(): Promise<void> {
 
   if (booted.mcpTools && !json) console.log(`MCP: 已接入 ${booted.mcpTools} 个外部工具`)
 
-  const log = new SessionLog(arg("session") || newSessionId())
+  const cliSessionId = arg("session") || newSessionId()
+  // 新建会话时写入 root 元信息；续跑已有会话（arg("session") 指向已存在文件）不重写
+  const log = new SessionLog(cliSessionId, { kind: "root", workDir: workspace })
   if (!json) console.log(`会话: ${log.id} | 模型: ${cfg.model} | 工作区: ${workspace}`)
 
   const controller = new AbortController()

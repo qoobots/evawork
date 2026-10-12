@@ -5,7 +5,7 @@
 
 import { runTurn } from "./loop.ts"
 import type { StreamFn, TurnResult } from "./loop.ts"
-import { SessionLog } from "./session.ts"
+import { SessionLog, nextSubId } from "./session.ts"
 import { defineTool } from "./tools.ts"
 import type {LlmConfig, SessionEvent, ToolContext, ToolResult, SubagentTrace } from "./types.ts"
 
@@ -32,16 +32,22 @@ export interface SubagentResult extends TurnResult {
   trace: SubagentTrace
 }
 
-let seq = 0
-
 export async function runSubagent(o: SubagentOptions): Promise<SubagentResult> {
   const denied: string[] = []
-  const log = new SessionLog(`${o.parentLog.id}-sub-${++seq}`)
+  // 子会话 id 由 nextSubId 决定（取同父最大序号 +1），避免子进程重启归零重名
+  const id = nextSubId(o.parentLog.id)
+  const log = new SessionLog(id, {
+    parentId: o.parentLog.id,
+    kind: "subtask",
+    goal: o.goal,
+    workDir: o.workspace,
+  })
 
   o.parentLog.append({
     type: "subagent/start",
     session: log.id,
     goal: o.goal,
+    parentId: o.parentLog.id,
     tools: o.tools || null,
   })
 

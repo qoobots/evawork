@@ -4,6 +4,7 @@ import {
   fetchTaskList,
   renameTask as renameTaskApi,
   type DeleteTasksResult,
+  type TaskSummary,
 } from '@/api/tasks';
 import { isTsTaskId } from '@/api/tsChannel';
 
@@ -19,6 +20,14 @@ export interface UiTask {
   work_dir?: string;
   created_at?: number;
   updated_at?: number;
+  /** 父任务 id（根任务为 null）。24 号方案：父子关系结构化 */
+  parent_id?: string | null;
+  /** 层级种类：root / subtask / job */
+  kind?: string;
+  /** 直接子任务（嵌套），仅根任务可能非空 */
+  children?: UiTask[];
+  /** 子任务数量（仅根任务非零） */
+  childCount?: number;
 }
 
 /** T-115：任务分组（一个工作区一组）。 */
@@ -93,6 +102,25 @@ function loadTasks(): UiTask[] {
   }
 }
 
+/**
+ * 把后端/API 的 TaskSummary 树递归转换成界面用的 UiTask（含嵌套子任务）。
+ * 层级字段（parent_id / kind / children / childCount）一并带过来（24 号方案）。
+ */
+function toUiTask(t: TaskSummary): UiTask {
+  return {
+    id: t.id,
+    title: t.title,
+    state: t.state,
+    work_dir: t.work_dir || '',
+    created_at: t.created_at,
+    updated_at: t.updated_at,
+    parent_id: t.parent_id ?? null,
+    kind: t.kind || 'root',
+    childCount: t.childCount ?? (t.children ? t.children.length : 0),
+    children: t.children && t.children.length ? t.children.map(toUiTask) : undefined,
+  };
+}
+
 /** 全壳状态：模式、任务列表、各浮层开关。 */
 export const useUiStore = defineStore('ui', {
   state: () => ({
@@ -111,6 +139,13 @@ export const useUiStore = defineStore('ui', {
     /** T-115：是否成功从后端拉过一次列表（界面据此区分"真的没有任务"和"没拉到"） */
     tasksLoaded: false,
     tasksError: '',
+    /**
+     * 24 号方案：子任务默认隐藏（只展示根任务，保持列表干净），
+     * 展开某个父任务或关掉本开关才看得到子任务。
+     */
+    hideSubtasks: true,
+    /** 已展开、显示其子任务的父任务 id 集合 */
+    expandedParents: [] as string[],
     meMenuOpen: false,
     messagesOpen: false,
   }),
@@ -185,6 +220,16 @@ export const useUiStore = defineStore('ui', {
         : [...this.collapsedGroups, key];
       this.persistCollapsed();
     },
+    /** 24 号方案：一键切换"隐藏/显示子任务"。默认隐藏，保持列表干净。 */
+    toggleHideSubtasks() {
+      this.hideSubtasks = !this.hideSubtasks;
+    },
+    /** 24 号方案：展开 / 收起某个父任务的子任务列表。 */
+    toggleExpandParent(id: string) {
+      this.expandedParents = this.expandedParents.includes(id)
+        ? this.expandedParents.filter((k) => k !== id)
+        : [...this.expandedParents, id];
+    },
     /**
      * T-118：设置侧栏宽度（钳到 [NAV_MIN, NAV_MAX] 并落盘）。
      *
@@ -233,25 +278,19 @@ export const useUiStore = defineStore('ui', {
     async refreshTasks() {
       try {
         const remote = await fetchTaskList();
-        /* 按 id 合并（远端为准）：
-           - 远端是会话目录的真相源 → 覆盖本地同 id 条目的标题 / 状态；
-           - 会话列表**不带工作区**，用本地那条的 `work_dir` 兜住，分组才不塌进「默认」；
-           - 远端没有的本地条目保留：临时条目（`t-`）尚未被确认，
-             刚建好的会话文件也可能还没落盘。 */
-        const byId = new Map<string, UiTask>();
-        for (const t of this.tasks) byId.set(t.id, t);
-        for (const t of remote) {
-          const prev = byId.get(t.id);
-          byId.set(t.id, {
-            id: t.id,
-            title: t.title,
-            state: t.state,
-            work_dir: t.work_dir || prev?.work_dir || '',
-            created_at: t.created_at ?? prev?.created_at,
-            updated_at: t.updated_at ?? prev?.updated_at,
-          });
+        /* 远端是会话目录的真相源，返回的是**根任务树**（子任务嵌套在 children 里）。
+           转换时把层级字段（parent_id / kind / children）一并带上。
+           本地条目只保留**临时的**（`t-`，还没换绑真实 id，会话可能尚未落盘）；
+           真实的 `ts-` 条目以会话目录为准——不在远端就说明会话文件已被删
+           （手动清目录 / 另一窗口删除）。这里必须剔除，否则影子列表里的幽灵条目
+           会在每次重启后"复活"——用户删了会话，重启一看任务又全回来了。 */
+        const remoteIds = new Set(remote.map((r) => r.id));
+        const out: UiTask[] = [];
+        for (const t of this.tasks) {
+          if (!isTsTaskId(t.id) || remoteIds.has(t.id)) out.push(t);
         }
-        this.tasks = [...byId.values()];
+        for (const r of remote) out.push(toUiTask(r));
+        this.tasks = out;
         this.tasksLoaded = true;
         this.tasksError = '';
         this.persist();

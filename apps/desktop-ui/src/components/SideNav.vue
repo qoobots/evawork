@@ -289,6 +289,16 @@ async function removeSelected() {
         >
           <UIcon :name="manageMode ? 'check' : 'sliders'" :size="13" />
         </button>
+        <!-- 24 号方案：一键隐藏/显示子任务（默认隐藏，保持列表干净） -->
+        <button
+          type="button"
+          class="head-btn"
+          :class="{ on: !ui.hideSubtasks }"
+          :title="ui.hideSubtasks ? i18n.t('tasks.show_subtasks') : i18n.t('tasks.hide_subtasks')"
+          @click="ui.toggleHideSubtasks()"
+        >
+          <UIcon :name="ui.hideSubtasks ? 'eye-off' : 'eye'" :size="13" />
+        </button>
       </div>
 
       <div v-if="manageMode" class="manage-bar">
@@ -341,9 +351,8 @@ async function removeSelected() {
           <!-- 折叠时把这些行真的从 DOM 里拿掉，而不是盖一层 ---->
           <template v-if="!isCollapsed(g.key)">
 
+          <template v-for="t in g.tasks" :key="t.id">
           <div
-            v-for="t in g.tasks"
-            :key="t.id"
             class="task-row"
             :class="{ active: route.params.id === t.id, picked: selected.includes(t.id) }"
           >
@@ -372,9 +381,20 @@ async function removeSelected() {
               :to="`/task/${t.id}`"
               @click="onTaskClick($event, t.id)"
             >
+              <!-- 24 号方案：有子任务且未全局隐藏时，给个展开/收起把手 -->
+              <button
+                v-if="!ui.hideSubtasks && t.childCount"
+                type="button"
+                class="sub-caret"
+                :class="{ open: ui.expandedParents.includes(t.id) }"
+                @click.stop.prevent="ui.toggleExpandParent(t.id)"
+              >
+                <UIcon :name="ui.expandedParents.includes(t.id) ? 'chevron-down' : 'chevron-right'" :size="11" />
+              </button>
               <UIcon name="chat" :size="13" />
               <span v-if="isRunning(t)" class="run-dot" :title="i18n.t('tasks.deleting')" />
               <span class="task-name">{{ t.title }}</span>
+              <span v-if="t.childCount" class="sub-n">{{ t.childCount }}</span>
             </router-link>
             <button
               v-if="!manageMode && editingId !== t.id"
@@ -386,6 +406,36 @@ async function removeSelected() {
               <UIcon name="dots" :size="13" />
             </button>
           </div>
+
+          <!-- 24 号方案：子任务仅在未全局隐藏、且父任务被展开时渲染，缩进显示 -->
+          <template v-if="!ui.hideSubtasks && t.children && ui.expandedParents.includes(t.id)">
+            <div
+              v-for="c in t.children"
+              :key="c.id"
+              class="task-row sub-row"
+              :class="{ active: route.params.id === c.id }"
+            >
+              <span class="sub-indent" />
+              <router-link
+                class="task-item"
+                :to="`/task/${c.id}`"
+                @click="onTaskClick($event, c.id)"
+              >
+                <UIcon name="branch" :size="12" />
+                <span class="task-name">{{ c.title }}</span>
+              </router-link>
+              <button
+                v-if="!manageMode"
+                type="button"
+                class="row-more"
+                :title="i18n.t('tasks.more')"
+                @click.stop="openMenu($event, c.id)"
+              >
+                <UIcon name="dots" :size="13" />
+              </button>
+            </div>
+          </template>
+          </template>
           </template>
         </div>
       </div>
@@ -551,6 +601,14 @@ async function removeSelected() {
 .task-row { position: relative; display: flex; align-items: center; border-radius: 7px; }
 .task-row:hover { background: var(--hover); }
 .task-row.active { background: var(--active-bg); }
+/* 24 号方案：子任务行缩进 + 弱化，区别于根任务 */
+.sub-row { padding-left: 14px; }
+.sub-row .task-item { font-size: 12px; color: var(--t2); }
+.sub-indent { width: 10px; flex: none; border-left: 1px solid var(--line); margin-left: 6px; }
+/* 根任务上的"展开子任务"把手与子任务计数徽标 */
+.sub-caret { width: 16px; height: 22px; flex: none; display: flex; align-items: center; justify-content: center; color: var(--t3); }
+.sub-caret:hover { color: var(--t1); }
+.sub-n { margin-left: auto; font-size: 10px; color: var(--t3); background: var(--line); border-radius: 8px; padding: 0 5px; }
 .task-item {
   flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px;
   padding: 6px 9px; border-radius: 7px; font-size: 12.5px; color: var(--t1);
