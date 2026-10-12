@@ -76,10 +76,13 @@ export const defaultSections: PromptSection[] = [
     render: (c) =>
       join([
         `可用工具：${c.tools.join(", ")}`,
+        "读写文件走专用工具：read_file（带行号）、write_file、edit_file（定点替换，old_string 要唯一）；" +
+          "找文件名用 glob_files、搜内容用 search_text——**不要用 run_command 跑 cat/grep/find**，编码与转义的坑工具层已经替你背了。",
         c.tools.includes("terminal")
           ? "terminal 的当前目录会跨命令保持；run_command 每条都重置回工作区根。"
           : null,
-        "工具返回失败时先读错误原因再决定下一步，盲目重试只会重复失败。", 
+        "多个**互相独立**的调用放在同一轮发出（一次请求里带多个 tool_calls），独立读取会并行执行；有先后依赖的才分开轮次。",
+        "工具返回失败时先读错误原因再决定下一步，盲目重试只会重复失败。",
       ]),
   },
   {
@@ -87,6 +90,37 @@ export const defaultSections: PromptSection[] = [
     // 空 → 整节消失（TS-040 约定）。
     id: "skills",
     render: () => builtinSkillsSection(),
+  },
+  {
+    // 持久记忆协议（文档 19 P0-5）：目录 + 格式 + 索引 + 排除清单 + 触发时机。
+    // 索引本身**不在这里渲染**——它每轮从磁盘现读、由 loop 作为一条独立 system 消息注入
+    // （可变清单塞进固定前缀会让缓存前缀天天失效）；本节给的是**协议**，不随轮次变。
+    id: "memory",
+    render: (c) => {
+      const dir = `${c.workspace.replace(/\\/g, "/")}/.evawork/memory`
+      return [
+        "# 持久记忆",
+        `你有跨会话的持久记忆，目录 \`${dir}\`（已存在，直接用 write_file 写，不要 mkdir、不要先检查目录）。`,
+        "一条记忆一个文件、只装一条事实，文件名 kebab-case（如 `user-role.md`），frontmatter 形状：",
+        "```",
+        "---",
+        "name: 短-kebab-标识",
+        "description: 一行摘要（召回时靠它判断相关性）",
+        "metadata:",
+        "  type: user | feedback | project | reference",
+        "---",
+        "正文；feedback / project 类型必须紧跟 **Why:** 与 **How to apply:** 两行；相关记忆用 [[name]] 互链。",
+        "```",
+        `写完（或改完）在 \`${dir}/MEMORY.md\` 维护一行索引：\`- [标题](文件名.md) — 一句钩子\`。`,
+        "**索引里只有这一行**：正文绝不进索引，MEMORY.md 也没有 frontmatter。",
+        "什么时候写：用户明说「记住…」；用户纠正了你的做法（记下来别再犯）；确认了某个从代码里看不出来的取舍；发现会反复踩的坑（环境、工具、约定）。",
+        "什么时候**不**写：代码结构、文件清单、git 里本来就有的历史、上一轮修了什么 bug、只对本次对话有意义的临时状态——这些repo 自己就记录了。",
+        "与 `.evawork/notes.md`（本轮任务草稿，交付后可删）的分工：notes 记的是**这件事**，memory 记的是**跨会话仍然成立的事实**。",
+        "召回：对话开头若有 `<memory-index>` 清单，那就是全部记忆。看到相关的条目，先用 read_file 读正文再决定用不用；",
+        "记忆反映的是**写下当时**的事实——若它提到某个文件/开关/流程，先核实它还存在，别按旧图走新路。",
+        "记忆坏了就删（write_file 空内容 + 移除索引行），过期就改，别堆。",
+      ].join("\n")
+    },
   },
   {
     id: "output",

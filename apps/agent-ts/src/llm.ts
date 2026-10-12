@@ -131,6 +131,14 @@ export async function* streamChat(
       temperature: opts.temperature ?? 0.7,
     }
     if (tools) body.tools = tools
+    /* usage 索要（缓存命中率观测，文档 19 P2-11）：**默认不开**。`stream_options`
+       不是 OpenAI 兼容网关的必选扩展——不支持的网关可能整条流 400，而 400 发生在
+       请求阶段会**把降级链的每一档都撞一遍**，观测指标不该有这种破坏半径。
+       开关在 LlmConfig.streamUsage（EVA_LLM_STREAM_USAGE=1）。 */
+    if (cfg.streamUsage) body.stream_options = { include_usage: true }
+    /* 服务端上下文管理（P2-13）：**原样透传，不猜语义**。上游不认就忽略它；
+       客户端压缩（context.ts）继续是正路，这里只是"策略可灰度"的口子。 */
+    if (cfg.contextManagement) body.context_management = cfg.contextManagement
     // 请求留痕：把发出去的完整 body（含 system 提示词）写盘，调提示词时复盘用
     traceRequest(opts.step, model, body)
 
@@ -198,6 +206,19 @@ export async function* streamChat(
         if (!payload || payload === "[DONE]") continue
         let obj: any
         try { obj = JSON.parse(payload) } catch { continue }
+        /* usage 分片（开了 stream_options 才有）：协议上它单独成帧、**choices 为空**，
+           所以必须放在 choice 判空之前，否则永远够不到。
+           cached_tokens 在 OpenAI 兼容里的字段名不统一（qwen 放 prompt_tokens_details，
+           有的网关直接平铺），两边都认。 */
+        if (obj?.usage) {
+          const u = obj.usage as Record<string, any>
+          yield {
+            type: "usage",
+            promptTokens: Number(u.prompt_tokens) || undefined,
+            cachedTokens: Number(u.prompt_tokens_details?.cached_tokens ?? u.cached_tokens) || undefined,
+            completionTokens: Number(u.completion_tokens) || undefined,
+          }
+        }
         const choice = obj?.choices?.[0]
         if (!choice) continue
         const delta = choice.delta ?? {}
@@ -248,6 +269,102 @@ export async function* streamChat(
   return // 这条流跑完了就收工，别再去试降级链上的下一个
   } // ← 关闭候选模型循环（chain 里的下一个只在**请求失败**时才轮到）
 } // ← 关闭 streamChat
+
+/**
+ * 非流式一次性小调用（动作安全分类器专用，文档 19 P1-8[0]）。
+ *
+ * 与 streamChat 的三点不同，每点都是刻意的：
+ *   1. **不走 modelChain 降级链**：分类器换模型 = 换判断标准，降级出来的结论
+ *      不能当同一个分类器用；模型名给谁就只试谁。
+ *   2. **小 max_tokens + stop 截断**：分类输出协议就一句话，没必要让它写小作文。
+ *   3. **失败不抛异常**，一律折算进 finish_reason：调用方（分类器）要据此
+ *      fail-closed——"通道没答上来"与"通道答了 ALLOW"是两种安全含义，
+ *      抛异常把它们压成同一种。
+ */
+export interface CompleteOnceOpts {
+  model: string
+  messages: { role: string; content: string }[]
+  system?: string
+  maxTokens?: number
+  /** 停止序列（OpenAI 兼容的 `stop`）：命中即截断返回 */
+  stop?: string[]
+  timeoutMs?: number
+  signal?: AbortSignal
+}
+
+export interface CompleteOnceResult {
+  text: string
+  /** stop=正常答完 / length=被 max_tokens 截 / error=上游或解析错 / timeout=超时 / unreachable=连不上 */
+  finishReason: "stop" | "length" | "error" | "timeout" | "unreachable"
+  promptTokens?: number
+  completionTokens?: number
+  error?: string
+}
+
+export async function completeOnce(cfg: LlmConfig, o: CompleteOnceOpts): Promise<CompleteOnceResult> {
+  const url = cfg.baseUrl.replace(/\/+$/, "") + "/chat/completions"
+  const body: Record<string, unknown> = {
+    model: o.model,
+    messages: o.messages,
+    stream: false,
+    temperature: 0,
+    max_tokens: o.maxTokens ?? 128,
+  }
+  if (o.system) body.messages = [{ role: "system", content: o.system }, ...o.messages]
+  if (o.stop?.length) body.stop = o.stop
+
+  const ctl = new AbortController()
+  const timer = setTimeout(() => ctl.abort(), o.timeoutMs ?? 15_000)
+  ;(timer as unknown as { unref?: () => void }).unref?.()
+  const onOuter = (): void => ctl.abort()
+  o.signal?.addEventListener("abort", onOuter, { once: true })
+  try {
+    const resp = await egressFetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(cfg.token ? { Authorization: `Bearer ${cfg.token}` } : {}),
+      },
+      body: JSON.stringify(body),
+      signal: ctl.signal,
+    })
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "")
+      return { text: "", finishReason: "error", error: `分类通道 ${resp.status}：${text.slice(0, 200)}` }
+    }
+    /* 解析单独兜一层：200 但 body 不是 JSON（网关把 502 包成 HTML 页、登录劫持页）
+       不能落进下面的 catch 被报成"连不上分类通道"——那是误导排查方向：
+       通道连上了，坏的是响应格式。 */
+    let j: Record<string, any>
+    try {
+      j = (await resp.json()) as Record<string, any>
+    } catch (e) {
+      const msg = (e as Error).message || String(e)
+      return { text: "", finishReason: "error", error: `分类通道响应不是 JSON：${msg.slice(0, 160)}` }
+    }
+    const choice = j?.choices?.[0]
+    const text = String(choice?.message?.content ?? "")
+    const finish = String(choice?.finish_reason ?? "")
+    return {
+      text,
+      finishReason: finish === "length" ? "length" : "stop",
+      promptTokens: Number(j?.usage?.prompt_tokens) || undefined,
+      completionTokens: Number(j?.usage?.completion_tokens) || undefined,
+    }
+  } catch (err) {
+    const e = err as { name?: string; message?: string }
+    // 超时与"外部取消"在本地都长得像 AbortError：看外层信号存不存在来分家
+    if (e.name === "AbortError") {
+      return o.signal?.aborted
+        ? { text: "", finishReason: "error", error: "调用被取消" }
+        : { text: "", finishReason: "timeout", error: `分类调用超时（${o.timeoutMs ?? 15_000}ms）` }
+    }
+    return { text: "", finishReason: "unreachable", error: `连不上分类通道：${e.message || e.name}` }
+  } finally {
+    clearTimeout(timer)
+    o.signal?.removeEventListener("abort", onOuter)
+  }
+}
 
 /**
  * 本次请求的候选模型链：首选 + 备用 + 套餐内兜底（去重、丢掉 `auto` 这类**未裁决**的占位）。
@@ -302,5 +419,17 @@ export function llmConfigFromEnv(overrides: Partial<LlmConfig> = {}): LlmConfig 
         "或直接用 --model 指定。这里不猜一个默认值——猜出来的往往是已下线的旧档。",
     )
   }
-  return { baseUrl, token, model, routes }
+  /* usage 索要开关（见 streamChat 里的注释）：默认关，EVA_LLM_STREAM_USAGE=1 才开 */
+  const streamUsage = ["1", "on", "true"].includes((process.env.EVA_LLM_STREAM_USAGE || "").trim().toLowerCase())
+  /* 服务端上下文管理：整段 JSON 原样透传，解析失败就当没配（不猜形状、不报错拦启动） */
+  let contextManagement: unknown
+  const cmRaw = (process.env.EVA_LLM_CONTEXT_MANAGEMENT || "").trim()
+  if (cmRaw) {
+    try {
+      contextManagement = JSON.parse(cmRaw)
+    } catch {
+      console.error("[llm] EVA_LLM_CONTEXT_MANAGEMENT 不是合法 JSON，已忽略")
+    }
+  }
+  return { baseUrl, token, model, routes, streamUsage, contextManagement }
 }

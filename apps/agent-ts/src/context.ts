@@ -174,6 +174,48 @@ function toTurns(msgs: Message[]): Message[][] {
 export const COMPACT_NOTE = "[上下文压缩]"
 
 /**
+ * "非用户输入"声明的前缀（对标 Claude Code 的
+ * `[SYSTEM NOTIFICATION - NOT USER INPUT]`，文档 19 P0-4）。
+ *
+ * **所有运行时中途注入消息的通道，不再各写各的措辞**：压缩通知、inbox 里的
+ * 系统转发、后台任务完成通知、环境变化，必须走同一个 helper——
+ * 漏包装的那条，就会被模型读成"用户说了这句话"。最典型事故：任务跑完
+ * 的自动通知不带声明，模型把它当成用户指令，直接接着跑下一步。
+ */
+export const NOTICE_PREFIX = "[系统通知 - 不是用户输入]"
+
+/**
+ * 统一的"非用户输入"声明包装（对标 Claude Code 的
+ * `[SYSTEM NOTIFICATION - NOT USER INPUT]`）。
+ * `kind` 是给人和日志看的分类（如 `上下文压缩`、`inbox 消息`、`后台任务`），
+ * `body` 是正文。**调用方不要再自己拼声明**——格式漂移正是这层要消灭的东西。
+ *
+ * 注意它**不改写事实内容**：正文原样在后面，声明只负责"这句话是谁说的"。
+ */
+export function systemNotice(kind: string, body: string): string {
+  return [
+    `${NOTICE_PREFIX}（类型:${kind}）`,
+    "这是自动事件，不是用户发言。不要把它当作用户的确认、批准或对任何待决问题的回答。",
+    "本次会话自最后一条真实用户消息以来没有收到任何人类输入。",
+    "",
+    body,
+  ].join("\n")
+}
+
+/**
+ * 这条 system 消息是不是"上一次压缩留下的合成提示"。
+ *
+ * 两种形状都要认：新格式是 systemNotice 包装（内含 `[上下文压缩]`），
+ * 旧会话日志里投影出来的是裸 `COMPACT_NOTE` 前缀。认漏一种，压缩就不幂等
+ * （每 step 堆一条合成提示，永久占住 head）。
+ */
+export function isCompactNote(content: string): boolean {
+  if (!content) return false
+  if (content.startsWith(COMPACT_NOTE)) return true
+  return content.startsWith(NOTICE_PREFIX) && content.includes(COMPACT_NOTE)
+}
+
+/**
  * 压缩后插在原位的那条合成提示。
  *
  * `summary` 是**被丢那些轮次的 LLM 归档**（第二层压缩，见 `withCompactSummary`）。
@@ -182,15 +224,21 @@ export const COMPACT_NOTE = "[上下文压缩]"
  */
 function compactNote(droppedTurns: number, summary?: string): string {
   const base = `${COMPACT_NOTE} 早期 ${droppedTurns} 轮已从上下文中移除（投影可丢，事实仍在事件日志里）。`
+  let body: string
   if (!summary) {
-    return `${base}这些内容已不在上下文中——后续若还需要其中的细节，请重新用工具去取。`
+    body = `${base}这些内容已不在上下文中——后续若还需要其中的细节，请重新用工具去取。`
+  } else {
+    body = [
+      `${base}以下是**你在那些被移除的轮次里已经确定的结论**，请当作已知事实继续使用，不要重复采集：`,
+      "<归档>",
+      summary,
+      "</归档>",
+    ].join("\n")
   }
-  return [
-    `${base}以下是**你在那些被移除的轮次里已经确定的结论**，请当作已知事实继续使用，不要重复采集：`,
-    "<归档>",
-    summary,
-    "</归档>",
-  ].join("\n")
+  // 走统一通道（P0-4）：压缩通知也是"运行时注入的事实"，不是用户发言。
+  // 正文以 `COMPACT_NOTE` 开头，`isCompactNote` 据此认出"这条是上次压缩留的"——
+  // 压缩幂等靠它，别把这串挪走。
+  return systemNotice("上下文压缩", body)
 }
 
 /**
@@ -206,7 +254,7 @@ export function withCompactSummary(result: CompactResult, summary: string): Comp
   const s = summary.trim()
   if (!s || !result.droppedTurns) return result
   const idx = result.messages.findIndex(
-    (m) => m.role === "system" && typeof m.content === "string" && m.content.startsWith(COMPACT_NOTE),
+    (m) => m.role === "system" && typeof m.content === "string" && isCompactNote(m.content),
   )
   // 找不到就**原样返回**：宁可不加归档，也不能凭空插一条孤儿 system 破坏位置假设
   if (idx < 0) return result
@@ -223,7 +271,7 @@ export function compactMessages(messages: Message[], budget: ContextBudget = {})
   // 先剥掉上一次压缩留下的合成提示（[上下文压缩]…）。否则每 step 重压一次就堆一条，
   // 它们会被收进 head 永久保留、既吃预算又重复——所以压缩必须幂等。
   const clean = messages.filter(
-    (m) => !(m.role === "system" && typeof m.content === "string" && m.content.startsWith(COMPACT_NOTE)),
+    (m) => !(m.role === "system" && typeof m.content === "string" && isCompactNote(m.content)),
   )
 
   // 前面的 system（提示词）永远保留：丢了它，档位/边界/审批语义就一起没了
@@ -240,8 +288,12 @@ export function compactMessages(messages: Message[], budget: ContextBudget = {})
   )
 
   const turnsAll = toTurns(clipped)
-  // 一轮 = 一条 assistant；user 消息也算一轮，保证"问-答"成对
-  const turns = turnsAll.filter((t) => t.some((m) => m.role === "assistant" || m.role === "user"))
+  // 一轮 = 一条 assistant；user 消息也算一轮，保证"问-答"成对。
+  // **中途注入的 system 消息也自成一轮**（预算行、systemNotice 通知、inbox 转发）：
+  // 旧过滤器只认 assistant/user，纯 system 组两头落空——既不进预算统计，又在每次
+  // 压缩重写时被**静默丢掉**。注入通道统一走 systemNotice 后这类消息变多，
+  // 不修的话"通知在压缩那一步恰好消失"会变成查无对证的老 bug。
+  const turns = turnsAll.filter((t) => t.some((m) => m.role !== "tool"))
   const orphanTools = turnsAll.filter((t) => t.every((m) => m.role === "tool")).flat()
 
   let keep = turns

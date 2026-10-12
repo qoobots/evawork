@@ -11,7 +11,8 @@
 //   3. **输出照样截断**：后台跑不代表可以无限涨内存，上限与工具输出一致（2 万字符）。
 
 import { spawn } from "node:child_process"
-import { defineTool } from "./tools.ts"
+import { decodeCmdBytes, defineTool } from "./tools.ts"
+import { systemNotice } from "./context.ts"
 import type { ToolResult } from "./types.ts"
 
 export type JobStatus = "running" | "done" | "failed" | "cancelled"
@@ -26,6 +27,12 @@ export interface JobInfo {
   output?: string
   error?: string
   exitCode?: number
+  /**
+   * 发起任务所在会话的 id（job_start 从 ToolContext.log 里带出来）。
+   * 完成通知要**按它路由**回正确会话的 inbox——后台任务是全局的，会话是各自的，
+   * 没有这个字段就只能广播或丢弃，两者都错。
+   */
+  owner?: string
 }
 
 const MAX_OUTPUT = 20_000
@@ -33,10 +40,45 @@ const KEEP_JOBS = 50
 
 const truncate = (s: string): string => (s.length > MAX_OUTPUT ? `${s.slice(0, MAX_OUTPUT)}\n…（已截断，共 ${s.length} 字符）` : s)
 
+/**
+ * 任务终态的通知文本（P1-7）。**必须走 systemNotice 包装**：
+ * 它是"注入对话的自动事件"，不带声明就会被模型读成用户发言/授权。
+ * `<task-notification>` 块与 Claude Code 同形；note 说"可能通知多次"，
+ * 因为续跑/重复终态都可能再来一条，收到通知 ≠ 见到终态。
+ */
+export function jobNotification(j: JobInfo): string {
+  const zh = j.status === "done" ? "完成" : j.status === "failed" ? "失败" : "已取消"
+  return systemNotice(
+    "后台任务",
+    [
+      "<task-notification>",
+      `<task-id>${j.id}</task-id>`,
+      `<status>${j.status}</status>`,
+      `<summary>后台任务 ${j.id}（${j.kind}）${zh}</summary>`,
+      j.status === "done" ? `<result>${(j.output || "（无输出）").slice(0, 500)}</result>` : "",
+      j.status === "failed" ? `<error>${(j.error || "（无原因）").slice(0, 500)}</error>` : "",
+      "<note>用 job_status 查完整输出；同一 task-id 可能通知多次，收到通知不等于任务已是终态。</note>",
+      "</task-notification>",
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  )
+}
+
 export class JobRegistry {
   private jobs: JobInfo[] = []
   private procs = new Map<string, ReturnType<typeof spawn>>()
   private seq = 0
+  /**
+   * 完成回调（由装配方接线，见 sdk.ts）：任务到终态时被调一次，
+   * 携带完整 JobInfo + 通知文本。注册表自己**不碰**会话/inbox——
+   * 路由是调用方的事（谁的会话发的任务，通知回谁）。
+   */
+  private onComplete?: (job: JobInfo, notification: string) => void
+
+  setOnComplete(cb: (job: JobInfo, notification: string) => void): void {
+    this.onComplete = cb
+  }
 
   private alloc(kind: string): JobInfo {
     const info: JobInfo = { id: `j${++this.seq}`, kind, status: "running", startedAt: Date.now() }
@@ -45,24 +87,35 @@ export class JobRegistry {
     return info
   }
 
+  /** 终态出口统一入口：落状态 + 触发通知（cancelled 在 cancel() 里单独发）。 */
+  private announce(info: JobInfo): void {
+    try {
+      this.onComplete?.({ ...info }, jobNotification(info))
+    } catch {
+      /* 通知失败不影响任务本身：结果已经在 info 里，job_status 永远查得到 */
+    }
+  }
+
   /** 发起一个任务：**立刻返回句柄**，不等它跑完。 */
   start(kind: string, runner: () => Promise<{ output?: string; error?: string; exitCode?: number }>): JobInfo {
     const info = this.alloc(kind)
     void runner()
       .then((r) => {
-        // 期间被取消了：后来的结果丢弃，状态保持 cancelled
+        // 期间被取消了：后来的结果丢弃，状态保持 cancelled（取消通知已在 cancel() 发过）
         if (info.status === "cancelled") return
         info.status = r.error ? "failed" : "done"
         info.output = r.output ? truncate(r.output) : undefined
         info.error = r.error ? truncate(r.error) : undefined
         info.exitCode = r.exitCode
         info.endedAt = Date.now()
+        this.announce(info)
       })
       .catch((err) => {
         if (info.status === "cancelled") return
         info.status = "failed"
         info.error = truncate(String((err as Error).message || err))
         info.endedAt = Date.now()
+        this.announce(info)
       })
       .finally(() => {
         this.procs.delete(info.id)
@@ -71,13 +124,22 @@ export class JobRegistry {
     return { ...info }
   }
 
-  /** 后台跑一条命令（与 run_command 同一套沙箱/时限约束）。 */
-  startCommand(command: string, cwd: string, timeoutMs = 120_000): JobInfo {
+  /**
+   * 后台跑一条命令。owner = 发起会话 id（完成通知路由用），由 job_start 从
+   * ToolContext.log 里带进来。
+   *
+   * 输出**按字节收集、退出时整体解码**（decodeCmdBytes）：与 run_command 同一个坑——
+   * `String(buffer)` 默认按 UTF-8 解，中文机上 cmd/PowerShell 的 GBK 输出会变成锟斤拷。
+   * 这里以前正是 String(d) 分段拼接：一个汉字被 data 事件切两半时无解，整体 UTF-8
+   * 强解又把 GBK 变乱码——同一个 bug 的第二现场，一并修掉。
+   */
+  startCommand(command: string, cwd: string, timeoutMs = 120_000, owner?: string): JobInfo {
     const cmd = String(command || "").trim()
     if (!cmd) throw new Error("命令为空")
     const ms = Math.min(Math.max(Number(timeoutMs) || 120_000, 1000), 600_000)
     // 先拿 id（句柄）再发起：没有句柄就没法取消
     const info = this.alloc("command")
+    info.owner = owner
 
     let child: ReturnType<typeof spawn>
     try {
@@ -94,22 +156,22 @@ export class JobRegistry {
     }
     this.procs.set(info.id, child)
 
-    let out = ""
-    let err = ""
+    const outChunks: Buffer[] = []
+    const errChunks: Buffer[] = []
     let killed = false
     const timer = setTimeout(() => {
       killed = true
       try { child.kill("SIGKILL") } catch { /* 已退出 */ }
     }, ms)
-    child.stdout?.on("data", (d) => { out += String(d) })
-    child.stderr?.on("data", (d) => { err += String(d) })
+    child.stdout?.on("data", (d) => { outChunks.push(Buffer.isBuffer(d) ? d : Buffer.from(String(d))) })
+    child.stderr?.on("data", (d) => { errChunks.push(Buffer.isBuffer(d) ? d : Buffer.from(String(d))) })
     child.on("error", (e) => {
       clearTimeout(timer)
       this.finish(info.id, "", `启动失败：${e.message}`, undefined)
     })
     child.on("close", (code) => {
       clearTimeout(timer)
-      const body = [out, err].filter(Boolean).join("\n")
+      const body = [decodeCmdBytes(Buffer.concat(outChunks)), decodeCmdBytes(Buffer.concat(errChunks))].filter(Boolean).join("\n")
       if (killed) {
         this.finish(info.id, body, `超时（>${ms}ms）。已杀死直接子进程，进程树可能仍有残留。`, code ?? undefined)
         return
@@ -160,6 +222,8 @@ export class JobRegistry {
         try { p.kill("SIGKILL") } catch { /* 已退出 */ }
         this.procs.delete(id)
       }
+      // 取消也是终态：主循环可能正等着它（通知文本里 status=cancelled 已如实写明）
+      this.announce(j)
     }
     return true
   }
@@ -173,6 +237,7 @@ export class JobRegistry {
     j.exitCode = exitCode
     j.endedAt = Date.now()
     this.prune()
+    this.announce(j)
   }
 
   private fail(id: string, error: string): void {
@@ -206,19 +271,24 @@ export function registerJobTools(): void {
   defineTool({
     name: "job_start",
     description:
-      "把一条命令放到**后台**跑（构建/测试这类慢活用）：立刻返回任务 id，不要干等。用 job_status 看结果。需要确认。",
+      "把一条命令放到**后台**跑：立刻返回任务 id 而不是结果，主循环继续干别的。" +
+      "适合构建/全量测试/装依赖这类分钟级慢活；**几秒内能完的命令别扔后台**——" +
+      "后台结果要另一次 job_status 才拿得到，快命令反而多绕一圈。" +
+      "任务完成后会有系统通知自动注入对话（通知≠你发的指令）；等它用 job_wait，查它用 job_status，撤销用 job_cancel。",
     parameters: [
-      { name: "command", type: "string", required: true, desc: "要执行的命令" },
-      { name: "timeout_ms", type: "number", required: false, desc: "超时毫秒，默认 120000" },
+      { name: "command", type: "string", required: true, desc: "要后台执行的命令" },
+      { name: "timeout_ms", type: "number", required: false, desc: "超时毫秒：默认 120000，上限 600000" },
     ],
     action: "command",
     execute(args, ctx): ToolResult {
       const cmd = String(args.command || "").trim()
       if (!cmd) return { ok: false, error: "命令为空" }
       try {
-        const j = jobs.startCommand(cmd, ctx.workspace, Number(args.timeout_ms) || 120_000)
+        // owner = 当前会话 id：完成通知按它路由回**这个**会话的 inbox（多会话不串门）
+        const owner = String((ctx.log as { id?: string } | undefined)?.id || "") || undefined
+        const j = jobs.startCommand(cmd, ctx.workspace, Number(args.timeout_ms) || 120_000, owner)
         // 只回 id：回结果就变成同步调用，模型还是会等
-        return { ok: true, output: `已发起后台任务 ${j.id}（${j.kind}）。用 job_status 查看，job_cancel 取消。` }
+        return { ok: true, output: `已发起后台任务 ${j.id}（${j.kind}）。用 job_status 查看，job_wait 等待，job_cancel 取消。` }
       } catch (err) {
         return { ok: false, error: String((err as Error).message || err) }
       }
@@ -227,7 +297,10 @@ export function registerJobTools(): void {
 
   defineTool({
     name: "job_status",
-    description: "看后台任务的状态与输出。传 id 看一个；不传就列全部（含仍在跑的）。",
+    description:
+      "看后台任务的状态与输出。返回格式：id [状态] 种类 [耗时]；done 附带（可能被截断的）输出。" +
+      "传 id 看一个；不传列全部摘要（不含详细输出）。任务终态本会由系统通知自动推给你，" +
+      "不必轮询——但通知可能漏不碍事，job_status 永远查得到事实。",
     parameters: [{ name: "id", type: "string", required: false, desc: "任务 id，不填=列出全部" }],
     action: "read",
     async execute(args): Promise<ToolResult> {
@@ -245,10 +318,12 @@ export function registerJobTools(): void {
 
   defineTool({
     name: "job_wait",
-    description: "等一个后台任务结束（最多等 timeout_ms）。超时就照实说还在跑，不假装结束。",
+    description:
+      "等一个后台任务结束（最多等 timeout_ms，默认 30000）。**超时不等于失败**：" +
+      "到点还在跑会如实返回 running，不报错——由你决定继续等还是先干别的。",
     parameters: [
       { name: "id", type: "string", required: true, desc: "任务 id" },
-      { name: "timeout_ms", type: "number", required: false, desc: "最多等多久，默认 30000" },
+      { name: "timeout_ms", type: "number", required: false, desc: "最多等多久，默认 30000，上限 600000" },
     ],
     action: "read",
     async execute(args): Promise<ToolResult> {
@@ -261,9 +336,11 @@ export function registerJobTools(): void {
 
   defineTool({
     name: "job_cancel",
-    description: "取消一个后台任务。只保证 kill 直接子进程，进程树可能仍有残留。",
+    description:
+      "取消一个后台任务。只 kill 直接子进程，**进程树孙进程可能残留**（结果同样如实写进通知）。" +
+      "已取消的任务再查 job_status 仍是 cancelled，不会复活。",
     parameters: [{ name: "id", type: "string", required: true, desc: "任务 id" }],
-    // 改的是 agent 自己的状态，不碰用户工作区 → 按 memory_write（非高危）
+    // 改的是 agent 自己的状态，不碰用户工作区 → 按 memory_write（非高危，可并行）
     action: "memory_write",
     execute(args): ToolResult {
       const id = String(args.id || "").trim()

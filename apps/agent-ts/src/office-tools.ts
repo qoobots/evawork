@@ -12,7 +12,7 @@
 
 import fs from "node:fs"
 import path from "node:path"
-import { defineTool, truncate } from "./tools.ts"
+import { defineTool, overwriteWarning, truncate } from "./tools.ts"
 import type { ToolContext, ToolResult } from "./types.ts"
 import {
   docxFromMarkdown,
@@ -60,7 +60,10 @@ export function registerOfficeTools(): void {
   defineTool({
     name: "create_document",
     description:
-      "生成 Word 文档（.docx）。content 用 Markdown 子集：# 到 ###### 是各级标题，'- ' 是要点，其余非空行是段落。需要表格时用 table 参数（JSON），不要用 ASCII 排版硬凑。path 给 .md/.markdown/.txt 会自动转成 .docx。",
+      "生成 Word 文档（.docx）。content 用 Markdown 子集：# 到 ###### 是各级标题，'- ' 是要点，其余非空行是段落。" +
+      "需要表格时用 table 参数（JSON），不要用 ASCII 排版硬凑。path 给 .md/.markdown/.txt 会自动转成 .docx。" +
+      "目标已存在会**整体覆盖**（结果里会警示）；改已有文档先用 read_document 读一遍再写，别凭印象重写。" +
+      "不用场景：纯文本/Markdown 文件用 write_file 写，不要为了\"好看\"走 docx；记忆与草稿都不该是 .docx。",
     parameters: [
       { name: "path", type: "string", required: true, desc: "输出路径（.docx；.md/.markdown/.txt 自动转 .docx）" },
       { name: "content", type: "string", required: true, desc: "Markdown 正文（标题用 #，要点用 - ）" },
@@ -81,12 +84,13 @@ export function registerOfficeTools(): void {
         if (table && (!Array.isArray(table.header) || !Array.isArray(table.rows))) {
           return { ok: false, error: 'table 需要形如 {"header":[...],"rows":[[...]]}' }
         }
+        const warn = overwriteWarning(abs, ctx.workspace)
         const r = await docxFromMarkdown(String(args.content ?? ""), table)
         fs.mkdirSync(path.dirname(abs), { recursive: true })
         fs.writeFileSync(abs, r.buffer)
         return {
           ok: true,
-          output: `已生成 Word 文档 ${relTo(ctx.workspace, abs)}（${r.bytes} 字节，${r.paragraphs} 段${r.tables ? "，含 1 个表格" : ""}）`,
+          output: `已生成 Word 文档 ${relTo(ctx.workspace, abs)}（${r.bytes} 字节，${r.paragraphs} 段${r.tables ? "，含 1 个表格" : ""}）${warn}`,
         }
       } catch (err) {
         return { ok: false, error: `生成 Word 文档失败：${String((err as Error).message || err)}` }
@@ -97,7 +101,9 @@ export function registerOfficeTools(): void {
   defineTool({
     name: "read_document",
     description:
-      "读 Word（.docx）或 Excel（.xlsx）并返回文本内容。改文档前先读它——凭猜测改已有文件最容易把内容改坏。",
+      "读 Word（.docx）或 Excel（.xlsx）并返回文本内容。改文档前先读它——凭猜测改已有文件最容易把内容改坏。" +
+      "PDF 暂不支持读取（只认 .docx/.xlsx）；xlsx 默认读第一个工作表、最多 200 行，可用 sheet/max_rows 调；" +
+      "输出超 20000 字符会截断，超大表格分段读。",
     parameters: [
       { name: "path", type: "string", required: true, desc: "文件路径（.docx 或 .xlsx）" },
       { name: "sheet", type: "string", required: false, desc: "xlsx 的工作表名（不给则读第一个）" },
@@ -136,7 +142,8 @@ export function registerOfficeTools(): void {
   defineTool({
     name: "create_spreadsheet",
     description:
-      "生成 Excel 表格（.xlsx）。header 是表头数组，rows 是数据行（每行一个数组，值的顺序与表头对应）。",
+      "生成 Excel 表格（.xlsx）。header 是表头数组，rows 是数据行（每行一个数组，值的顺序与表头对应）。" +
+      "目标路径已存在会**整体覆盖**（结果里警示）。不用场景：两三行数据直接写在文档里用 Markdown 表格，不值得单独建一个 xlsx。",
     parameters: [
       { name: "path", type: "string", required: true, desc: "输出路径（.xlsx）" },
       { name: "sheet", type: "string", required: false, desc: "工作表名（默认 Sheet1）" },
@@ -154,12 +161,13 @@ export function registerOfficeTools(): void {
         if (!Array.isArray(rows)) return { ok: false, error: 'rows 必须是二维数组，例如 [["日活",12345]]' }
         const bad = rows.findIndex((r) => !Array.isArray(r))
         if (bad >= 0) return { ok: false, error: `rows 第 ${bad + 1} 行不是数组（每行要是一个数组）` }
+        const warn = overwriteWarning(abs, ctx.workspace)
         const r = await xlsxFromRows(String(args.sheet || "Sheet1"), header, rows)
         fs.mkdirSync(path.dirname(abs), { recursive: true })
         fs.writeFileSync(abs, r.buffer)
         return {
           ok: true,
-          output: `已生成表格 ${relTo(ctx.workspace, abs)}（工作表 "${r.sheet}"，${r.columns} 列 ${r.rows} 行，${r.bytes} 字节）`,
+          output: `已生成表格 ${relTo(ctx.workspace, abs)}（工作表 "${r.sheet}"，${r.columns} 列 ${r.rows} 行，${r.bytes} 字节）${warn}`,
         }
       } catch (err) {
         return { ok: false, error: `生成表格失败：${String((err as Error).message || err)}` }
@@ -170,7 +178,8 @@ export function registerOfficeTools(): void {
   defineTool({
     name: "create_slides",
     description:
-      "生成 PowerPoint 演示文稿（.pptx）。slides 是页面数组，每页 {title, bullets?, note?}。做汇报或方案时用它，不要写 ASCII 幻灯片。",
+      "生成 PowerPoint 演示文稿（.pptx）。slides 是页面数组，每页 {title, bullets?, note?}。做汇报或方案时用它，不要写 ASCII 幻灯片。" +
+      "目标已存在会**整体覆盖**（结果里警示）。不用场景：纯文字汇报用 create_document，不要为了\"有封面\"走 pptx。",
     parameters: [
       { name: "path", type: "string", required: true, desc: "输出路径（.pptx）" },
       { name: "slides", type: "string", required: true, desc: '页面 JSON 数组：[{"title":"季度总结","bullets":["要点一"]}]' },
@@ -184,12 +193,13 @@ export function registerOfficeTools(): void {
         if (!slides?.length) return { ok: false, error: 'slides 不能为空，例如 [{"title":"标题"}]' }
         const bad = slides.findIndex((s) => !s || typeof s.title !== "string")
         if (bad >= 0) return { ok: false, error: `slides 第 ${bad + 1} 页缺少 title` }
+        const warn = overwriteWarning(abs, ctx.workspace)
         const r = await pptxFromSlides(slides)
         fs.mkdirSync(path.dirname(abs), { recursive: true })
         fs.writeFileSync(abs, r.buffer)
         return {
           ok: true,
-          output: `已生成演示文稿 ${relTo(ctx.workspace, abs)}（${r.slides} 页：${r.titles.join(" / ")}，${r.bytes} 字节）`,
+          output: `已生成演示文稿 ${relTo(ctx.workspace, abs)}（${r.slides} 页：${r.titles.join(" / ")}，${r.bytes} 字节）${warn}`,
         }
       } catch (err) {
         return { ok: false, error: `生成演示文稿失败：${String((err as Error).message || err)}` }
@@ -200,7 +210,8 @@ export function registerOfficeTools(): void {
   defineTool({
     name: "create_pdf",
     description:
-      "生成 PDF（.pdf）。content 是正文（空行分页），自动折页。中文会自动嵌入系统字体；找不到中文字体时明确报错并建议改用 create_document。",
+      "生成 PDF（.pdf）。content 是正文（空行分页），自动折页。中文会自动嵌入系统字体（Windows 找 msyh/simhei，macOS 找 PingFang SC）；" +
+      "找不到中文字体时明确报错并建议改用 create_document。目标已存在会**整体覆盖**（结果里警示）。",
     parameters: [
       { name: "path", type: "string", required: true, desc: "输出路径（.pdf）" },
       { name: "content", type: "string", required: true, desc: "正文内容（空行表示分页）" },
@@ -212,6 +223,7 @@ export function registerOfficeTools(): void {
         if (!/\.pdf$/i.test(abs)) return { ok: false, error: "create_pdf 只写 .pdf 文件" }
         const content = String(args.content ?? "")
         if (!content.trim()) return { ok: false, error: "content 为空，没有内容可排" }
+        const warn = overwriteWarning(abs, ctx.workspace)
         const pages = content.replace(/\r\n/g, "\n").split(/\n\s*\n/).map((x) => x.trim()).filter(Boolean)
         const r = await pdfFromPages(pages)
         fs.mkdirSync(path.dirname(abs), { recursive: true })
@@ -220,7 +232,8 @@ export function registerOfficeTools(): void {
           ok: true,
           output:
             `已生成 PDF ${relTo(ctx.workspace, abs)}（${r.pages} 页，${r.bytes} 字节` +
-            `${r.cjkFontEmbedded ? "，已嵌入中文字体 " + (r.fontPath || "") : "（纯 ASCII，未嵌字体）"}`,
+            `${r.cjkFontEmbedded ? "，已嵌入中文字体 " + (r.fontPath || "") : "（纯 ASCII，未嵌字体）"}` +
+            `）${warn}`,
         }
       } catch (err) {
         return { ok: false, error: `生成 PDF 失败：${String((err as Error).message || err)}` }

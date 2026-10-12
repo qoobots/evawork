@@ -11,18 +11,21 @@
 //   2. **取消是协作式**的：收到 AbortSignal 就在当前 step 边界停，已拿到的正文原样保留，
 //      不重发、不重试（用户已经不想看了）。
 
-import type { LlmConfig, Message, SessionEvent, StreamChunk, ToolCall, ToolResult } from "./types.ts"
+import type { InboxMessage, LlmConfig, Message, SessionEvent, StreamChunk, ToolCall, ToolContext, ToolResult } from "./types.ts"
 import type { StopReason } from "./types.ts"
+import { parallelSafe } from "./types.ts"
 export type { StopReason }
 
 import { streamChat } from "./llm.ts"
 import { allTools, executeTool, openaiSchemas, parseArgs, preExecute } from "./tools.ts"
+import type { PreExecResult } from "./tools.ts"
 import type { SessionLog } from "./session.ts"
 import { LoopGuard } from "./guard.ts"
 import { maybeSpill } from "./spill.ts"
-import { compactMessages, projectEvents, clipText, estimateTokens, withCompactSummary } from "./context.ts"
+import { compactMessages, projectEvents, clipText, estimateTokens, withCompactSummary, NOTICE_PREFIX, systemNotice } from "./context.ts"
 import type { ContextUsage } from "./context.ts"
 import { computeContextUsage } from "./usage.ts"
+import { ensureMemoryDir, formatIndexForContext, loadIndex } from "./memory.ts"
 import { telemetry } from "./telemetry.ts"
 
 import { rewindPoint } from "./session.ts"
@@ -50,8 +53,17 @@ export interface TurnOptions {
    */
   archiveDropped?: boolean
   signal?: AbortSignal
-  /** 在每个 step 边界拉一次外部注入的消息（agent 的 inbox；中途插话靠它）。 */
-  inbox?: () => string[]
+  /**
+   * 本轮是**子代理的 turn**（runSubagent 传 true）。它决定两件事：
+   * `handback` 工具认不认这次交付（ToolContext.subtask），以及交付闸在 step 边界生效。
+   */
+  subtask?: boolean
+  /**
+   * 在每个 step 边界拉一次外部注入的消息（agent 的 inbox；中途插话靠它）。
+   * **带来源**：用户插话与系统转发（后台任务完成通知等）协议上不同——
+   * 系统来源的注入必须自带"非用户输入"声明（文档 19 P0-4），见下面的注入代码。
+   */
+  inbox?: () => InboxMessage[]
   /** 换掉模型流：不填就用 `streamChat`。**这是给测试和替代 driver 留的口子。** */
   stream?: StreamFn
   /** 工具子集（子代理用）：只把白名单里的工具暴露给这次 turn。不填 = 全部。 */
@@ -219,11 +231,36 @@ export async function runTurn(o: TurnOptions): Promise<TurnResult> {
   if (o.system) sp.setText("identity", o.system)
   const ctx: PromptContext = {
     workspace: o.workspace,
-    tools: allTools().map((t) => t.name),
+    // 提示词里的工具清单 = **这一轮实际暴露给模型的那份**（o.tools 就是暴露名单/子集）。
+    // 用全量注册表会把子代理专属通道（handback）也列进主任务提示词——
+    // 名单里出现却调不通的工具，只会诱导模型去猜。
+    tools: o.tools ?? allTools().map((t) => t.name),
     platform: process.platform,
     date: new Date().toISOString().slice(0, 10),
   }
   messages.push({ role: "system", content: sp.build(ctx) })
+
+  /* 持久记忆索引（文档 19 P0-5）：每轮从磁盘现读，作为**独立一条 system 消息**注入。
+     不进固定前缀——写一条记忆索引就多一行，塞进前缀等于让缓存前缀天天失效；
+     也不指望模型"记得去读 MEMORY.md"——忘了是常态，清单在眼前才会真去读正文。
+     空清单不注入（没有记忆就没有这条消息，缓存前缀与"从无记忆"完全一致）。 */
+  ensureMemoryDir(o.workspace)
+  const memoryIndex = formatIndexForContext(loadIndex(o.workspace))
+  if (memoryIndex) messages.push({ role: "system", content: memoryIndex })
+
+  /* 本轮共享的工具上下文：
+     - loadedSkills 每个 runTurn 一个新 Set（load_skill 的幂等保护，跨轮不残留——
+       技能正文本来就会在压缩时被丢，残留反而会让"重新加载"被错误地拒绝）；
+     - handback 由子代理的交付工具写入，step 边界统一收口（见下面交付闸）；
+     - cfg/log 传进去，delegate 才知道自己有没有模型通道可派子代理。 */
+  const toolCtx: ToolContext = {
+    workspace: o.workspace,
+    signal: o.signal,
+    cfg: o.cfg,
+    log: o.log,
+    subtask: o.subtask,
+    loadedSkills: new Set<string>(),
+  }
 
   /* 历史对话必须进上下文（TS-063）。
      此前每轮都是「system + 当前这一句」——**追问其实是没有记忆的**：
@@ -263,12 +300,19 @@ export async function runTurn(o: TurnOptions): Promise<TurnResult> {
     emit({ type: "step/start", step: steps })
     emit({ type: "agent/step", step: steps })
 
-    /* inbox：外部在 step 边界插进来的话（人中途插一句、子代理回了消息）。
-       只在**第 2 步之后**注入——第 1 步前注入等于把目标又说一遍。 */
+    /* inbox：外部在 step 边界插进来的话（人中途插一句、后台任务完成通知、子代理回话）。
+       只在**第 2 步之后**注入——第 1 步前注入等于把目标又说一遍。
+       **带来源的注入**（文档 19 P0-4）：jobs 的通知在源头就包了 systemNotice，
+       这里兜住"没包装的漏网之鱼"——system 来源没带声明前缀就当场补上，
+       绝不裸着进对话：模型把"任务跑完了"读成"用户让我继续"是真实发生过的事故。 */
     if (steps > 1) {
       for (const m of o.inbox?.() || []) {
-        messages.push({ role: "user", content: m })
-        emit({ type: "agent/inbox", step: steps, message: m })
+        const raw = String(m.message || "")
+        if (!raw.trim()) continue
+        const isSystem = m.source === "system"
+        const body = isSystem && !raw.startsWith(NOTICE_PREFIX) ? systemNotice("inbox", raw) : raw
+        messages.push({ role: isSystem ? "system" : "user", content: body })
+        emit({ type: "agent/inbox", step: steps, message: body, source: isSystem ? "system" : "user" })
       }
     }
 
@@ -333,6 +377,13 @@ export async function runTurn(o: TurnOptions): Promise<TurnResult> {
           o.onText?.(chunk.text)
         } else if (chunk.type === "tool_calls") {
           calls = chunk.calls
+        } else if (chunk.type === "usage") {
+          /* 缓存命中率读数（文档 19 P2-11）：只有 EVA_LLM_STREAM_USAGE 开着才有分片。
+             只进遥测、不进事件日志——它是聚合指标，不是会话事实；
+             cached/prompt 的比值就是"只追加不修改"纪律（P1-10）的验收指标。 */
+          if (chunk.promptTokens) telemetry.count("llm.prompt_tokens", chunk.promptTokens)
+          if (chunk.cachedTokens) telemetry.count("llm.cached_tokens", chunk.cachedTokens)
+          if (chunk.completionTokens) telemetry.count("llm.completion_tokens", chunk.completionTokens)
         } else if (chunk.type === "error") {
           err = chunk.message
         }
@@ -371,6 +422,33 @@ export async function runTurn(o: TurnOptions): Promise<TurnResult> {
     // 还要继续：把"为什么继续"落成事件，调用方能据此决定要不要掐断（DSH 的 turn-stopping 挂点）
     emit({ type: "agent/continuation", step: steps, reason: `模型请求 ${calls.length} 个工具`, tools: calls.map((c) => c.name) })
 
+    /* ---- 工具调用分三段处理（文档 19 P2-14 的并行口径）----
+       **计划**（按调用顺序）：子集拒 → 循环卫生 → preExecute（含安全分类器）。
+         全部 `tool/call` 事件按序在这里落——界面先看见"这一步要干什么"，再看见结果。
+       **执行**：这批要真跑的执行段**全部** parallelSafe（read / memory_write / llm）才并行；
+         掺进一个 write / command / network 就整批退回串行。判据是动作类别不是工具名——
+         新工具默认落串行是安全的错法，把并行窗口开大才需要论证。
+       **落账**（仍按调用顺序）：`tool/result`、onTool、失败计数、工具消息全部按**调用顺序**落，
+         并行只改完成顺序，不改协议顺序——tool 消息与 tool_calls 的配对按 id 成立，
+         但乱序落盘会让回放看起来像配错了行，不给这个机会。 */
+    interface Planned {
+      c: ToolCall
+      args: Record<string, unknown>
+      /** 非空 = 不执行，直接以"未执行：{reject}"回填。 */
+      reject?: string
+      /** 子代理越界调用：既有语义是"有 tool/call、无 tool/result、不计失败"。 */
+      subset?: boolean
+      /** 循环卫生拒绝：既有语义是"tool/result 带专门话术、计一次失败"。 */
+      looped?: boolean
+      /** preExecute 的判定结果（只有真走到这层的调用才有）。 */
+      pre?: PreExecResult
+      /** 循环卫生的提醒（不拦，只贴进结果）。 */
+      warn?: string
+      /** 执行结果（进入执行段的调用才有）。 */
+      res?: ToolResult
+    }
+
+    const plans: Planned[] = []
     for (const c of calls) {
       const args = parseArgs(c.arguments)
 
@@ -379,11 +457,8 @@ export async function runTurn(o: TurnOptions): Promise<TurnResult> {
       if (o.tools && !o.tools.includes(c.name)) {
         telemetry.count("tool.denied", 1, { tool: c.name, reason: "工具子集外" })
         const reason = `子代理不可用工具 ${c.name}（可用：${o.tools.join(", ")}）`
-        const content = `未执行：${reason}`
-        messages.push({ role: "tool", tool_call_id: c.id, name: c.name, content })
         emit({ type: "tool/call", step: steps, call: c.id, tool: c.name, args, allowed: false, reason: "工具子集外" })
-        // 走 onTool 的"被拒"通道：子代理据此把它带回主任务（TS-043）
-        o.onTool?.(c.name, args, null, reason)
+        plans.push({ c, args, reject: reason, subset: true })
         continue
       }
 
@@ -392,102 +467,106 @@ export async function runTurn(o: TurnOptions): Promise<TurnResult> {
          作为工具结果喂给模型，让模型自己换做法或向用户说明。 */
       const verdict = guard.record(c.name, args)
       if (verdict.kind === "stop") {
-        const loopMsg = `${verdict.reason}。本次调用已被跳过，请换一种做法或向用户说明当前卡住的原因。`
-        failedTools += 1
-        emit({
-          type: "tool/call",
-          step: steps,
-          call: c.id,
-          tool: c.name,
-          args,
-          allowed: false,
-          reason: "循环调用",
-        } as Omit<SessionEvent, "seq" | "ts">)
-        emit({
-          type: "tool/result",
-          step: steps,
-          call: c.id,
-          tool: c.name,
-          ok: false,
-          error: loopMsg,
-          content: loopMsg,
-        } as Omit<SessionEvent, "seq" | "ts">)
-        messages.push({
-          role: "tool",
-          tool_call_id: c.id,
-          name: c.name,
-          content: loopMsg,
-        })
-        o.onTool?.(c.name, args, { ok: false, error: loopMsg }, "循环调用")
+        emit({ type: "tool/call", step: steps, call: c.id, tool: c.name, args, allowed: false, reason: "循环调用" })
+        plans.push({ c, args, reject: verdict.reason, looped: true })
         continue
       }
 
-      const pre = await preExecute(c.name, args)
+      const pre = await preExecute(c.name, args, { cfg: o.cfg, signal: o.signal })
       // emit 而不是 log.append：工具事件**要推给界面**——执行过程卡片就靠这两类事件
       // （tool/call → "在跑什么"，tool/result → 结果与成败）。只落盘的话，
       // 界面的"执行过程"里就只有叙述文字，用户看不到它到底干了什么。
       // call = OpenAI 的 tool_call_id：界面靠它配对"调用 → 结果"。**一轮可以并发
       // 调多个同名工具**（两次 list_dir），用 step+tool 拼 id 会撞车——结果回填错行、
       // 去重误杀，界面上工具卡片就少一截。
-      emit({
-        type: "tool/call",
-        step: steps,
-        call: c.id,
-        tool: c.name,
-        args,
-        allowed: pre.allowed,
-        reason: pre.reason,
-      } as Omit<SessionEvent, "seq" | "ts">)
+      emit({ type: "tool/call", step: steps, call: c.id, tool: c.name, args, allowed: pre.allowed, reason: pre.reason })
+      plans.push({ c, args, pre, reject: pre.allowed ? undefined : pre.reason, warn: verdict.kind === "warn" ? verdict.reason : undefined })
+    }
 
+    /* 执行段：全并行或全串行，没有"一半一半"——掺进 write/command 时，
+       并行的那半先跑完也可能把串行的依赖顺序搅乱，整批串行最省心。 */
+    const toRun = plans.filter((p) => !p.reject && p.pre)
+    if (toRun.length > 1 && toRun.every((p) => parallelSafe(p.pre!.action))) {
+      telemetry.count("tool.parallel_batch")
+      await Promise.all(
+        toRun.map((p) => {
+          const stop = telemetry.time("tool", { tool: p.c.name })
+          return executeTool(p.pre!.tool!, p.args, toolCtx).then((r) => {
+            p.res = r
+            stop()
+          })
+        }),
+      )
+    } else {
+      for (const p of toRun) {
+        const stop = telemetry.time("tool", { tool: p.c.name })
+        p.res = await executeTool(p.pre!.tool!, p.args, toolCtx)
+        stop()
+      }
+    }
+
+    /* 落账：按调用顺序。上面执行段只往 p.res 里放结果，这里才产生事件与消息。 */
+    for (const p of plans) {
       let content: string
-      const stopTool = telemetry.time("tool", { tool: c.name })
-      if (!pre.allowed) {
-        telemetry.count("tool.denied", 1, { tool: c.name, reason: String(pre.reason).slice(0, 80) })
-        content = `未执行：${pre.reason}`
-        failedTools += 1
-        emit({ type: "tool/result", step: steps, call: c.id, tool: c.name, ok: false, error: content, content })
-        o.onTool?.(c.name, args, null, pre.reason)
-        stopTool()
-      } else {
-        const res = await executeTool(pre.tool!, args, {
-          workspace: o.workspace,
-          // 用户点停止也能掐断工具：否则卡在一条命令上时"停止"就不管用了
-          signal: o.signal,
-          cfg: o.cfg,
-          log: o.log,
-        })
-        content = res.ok ? String(res.output ?? "") : `执行失败：${res.error}`
-        // content 一并落盘：事件日志是真相源，只记长度的话回放时无法还原上下文（TS-042）
-        emit({
-          type: "tool/result",
-          step: steps,
-          call: c.id,
-          tool: c.name,
-          ok: res.ok,
-          chars: content.length,
-          content,
-          // 子代理轨迹（只有 delegate 会给）：界面那张卡的数据源，与后端同形
-          subagent: res.subagent ?? null,
-        })
-        o.onTool?.(c.name, args, res, "")
-        stopTool()
-        if (!res.ok) {
-          failedTools += 1
-          telemetry.count("tool.failed", 1, { tool: c.name })
+      if (p.reject) {
+        content = `未执行：${p.reject}`
+        if (p.subset) {
+          // 走 onTool 的"被拒"通道：子代理据此把它带回主任务（TS-043）
+          o.onTool?.(p.c.name, p.args, null, p.reject)
+          if (p.warn) content += `\n[循环卫生] ${p.warn}`
+          messages.push({ role: "tool", tool_call_id: p.c.id, name: p.c.name, content })
+          continue
         }
+        failedTools += 1
+        if (p.looped) {
+          content = `${p.reject}。本次调用已被跳过，请换一种做法或向用户说明当前卡住的原因。`
+          emit({ type: "tool/result", step: steps, call: p.c.id, tool: p.c.name, ok: false, error: content, content })
+          o.onTool?.(p.c.name, p.args, { ok: false, error: content }, "循环调用")
+        } else {
+          telemetry.count("tool.denied", 1, { tool: p.c.name, reason: String(p.reject).slice(0, 80) })
+          emit({ type: "tool/result", step: steps, call: p.c.id, tool: p.c.name, ok: false, error: content, content })
+          o.onTool?.(p.c.name, p.args, null, String(p.reject))
+        }
+        // 提醒要**进到模型能看到的地方**（工具结果里），否则它不知道自己在打转
+        if (p.warn) content += `\n[循环卫生] ${p.warn}`
+        messages.push({ role: "tool", tool_call_id: p.c.id, name: p.c.name, content })
+        continue
       }
 
-      // 提醒要**进到模型能看到的地方**（工具结果里），否则它不知道自己在打转
-      if (verdict.kind === "warn") content += `\n[循环卫生] ${verdict.reason}`
+      const res = p.res!
+      content = res.ok ? String(res.output ?? "") : `执行失败：${res.error}`
+      // content 一并落盘：事件日志是真相源，只记长度的话回放时无法还原上下文（TS-042）
+      emit({
+        type: "tool/result",
+        step: steps,
+        call: p.c.id,
+        tool: p.c.name,
+        ok: res.ok,
+        chars: content.length,
+        content,
+        // 子代理轨迹（只有 delegate 会给）：界面那张卡的数据源，与后端同形
+        subagent: res.subagent ?? null,
+      })
+      o.onTool?.(p.c.name, p.args, res, "")
+      if (!res.ok) {
+        failedTools += 1
+        telemetry.count("tool.failed", 1, { tool: p.c.name })
+      }
+      if (p.warn) content += `\n[循环卫生] ${p.warn}`
       // 长输出溢出到文件：不把几万字符塞回上下文（TS-031）
       const shown = maybeSpill(o.workspace, content.slice(0, MAX_TOOL_RESULT))
-      messages.push({
-        role: "tool",
-        tool_call_id: c.id,
-        name: c.name,
-        content: shown.text,
-      })
-      // 工具执行结束
+      messages.push({ role: "tool", tool_call_id: p.c.id, name: p.c.name, content: shown.text })
+    }
+
+    /* 交付闸（文档 19 P0-3）：handback 工具写入正文后，在 **step 边界**收口——
+       此刻本轮的 tool_call 已全部配好 tool_result，协议不破。
+       放在这里而不是调用当场，是因为当场 break 会把同批其余调用劈成半截。 */
+    if (toolCtx.handback !== undefined) {
+      finalText = toolCtx.handback
+      stopReason = "handback"
+      note = "子代理经 handback 交付结论，本轮到此为止"
+      emit({ type: "step/end", step: steps })
+      break
     }
 
     emit({ type: "step/end", step: steps })

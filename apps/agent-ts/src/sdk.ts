@@ -25,7 +25,8 @@ import type { ExportFormat } from "./query.ts"
 import { runTurn } from "./loop.ts"
 import { llmConfigFromEnv } from "./llm.ts"
 import { fetchModelCatalog, pickFeatured } from "./modelcatalog.ts"
-import type { Message, SessionEvent } from "./types.ts"
+import { jobs } from "./jobs.ts"
+import type { InboxMessage, Message, SessionEvent } from "./types.ts"
 
 const PROTOCOL = "eva-agent-ts/1"
 
@@ -43,6 +44,12 @@ interface Session {
   log: SessionLog
   controller: AbortController
   running: boolean
+  /**
+   * 待注入的消息（inbox）：后台任务完成通知按 owner 路由到这里，
+   * 正在跑的 turn 在 step 边界取走。会话空闲时消息留着——
+   * 下一轮开场后的第一个 step 边界送达，**不丢**（通知≠事实，事实永远 job_status 查得到）。
+   */
+  pending: InboxMessage[]
 }
 
 export interface ServeOptions {
@@ -112,6 +119,13 @@ export async function serve(opts: ServeOptions): Promise<void> {
         systemPrompt: booted.prompt,
         tools: booted.exposedTools(),
         signal: s.controller.signal,
+        /* inbox：后台任务完成通知等系统事件在 step 边界进对话（文档 19 P1-7）。
+           取完即清空——同一条通知不会被注入两遍。 */
+        inbox: () => {
+          const q = s.pending
+          s.pending = []
+          return q
+        },
         onEvent: (e: SessionEvent) => notify("session.event", { sessionId: s.id, event: e }),
         /* 流式正文**不落事件日志**：一条一个 token，落盘会把日志撑爆，
            而它本来也不是"事实"（完整正文在 turn/end 与 session.status 里都有）。
@@ -142,13 +156,55 @@ export async function serve(opts: ServeOptions): Promise<void> {
   function newSession(): Session {
     const id = newSessionId()
     const log = new SessionLog(id, { kind: "root", workDir: opts.workspace })
-    const s: Session = { id, log, controller: new AbortController(), running: false }
+    const s: Session = { id, log, controller: new AbortController(), running: false, pending: [] }
     sessions.set(id, s)
     return s
   }
 
+  /* 后台任务完成 → **按 owner 路由**回发起它的那个会话的 inbox（jobs 是全局的，
+     会话是各自的，广播或丢弃都错）。通知文本在 jobs.ts 源头就包了 systemNotice
+     （"不是用户输入"声明），loop 侧的补包装认前缀、不会包两层。
+     owner 不在（会话已被删/进程重启）就安静放弃——job_status 永远查得到事实。 */
+  jobs.setOnComplete((job, notification) => {
+    if (!job.owner) return
+    const s = sessions.get(job.owner)
+    if (!s) return
+    s.pending.push({ message: notification, source: "system" })
+  })
+
+  /**
+   * 这个会话用过的**落盘工作区**（时间序，最后一个 = 最近一次）。
+   *
+   * 真相源就是会话日志，不另起一份内存表——会话可能早就不在 `sessions` 里了
+   * （回放旧会话时的 determinism 请求），但日志永远在。两个字段都认：
+   * `session/meta` 的 workDir（建会话时写）与 `turn/start` 的 workspace（每轮一条，
+   * loop.ts 写的）。相邻去重只是省数组，不改变"取最后一个"的语义。
+   * 都读不出来 = 没用过，返回空让 resolveWorkspace 退回显式参数 / 启动值。
+   */
+  function sessionWorkspaces(sid: string): string[] {
+    const out: string[] = []
+    const push = (w: unknown): void => {
+      const s = typeof w === "string" ? w.trim() : ""
+      if (s && s !== out[out.length - 1]) out.push(s)
+    }
+    try {
+      for (const e of new SessionLog(sid).events()) {
+        if (e.type === "session/meta") push((e as { workDir?: unknown }).workDir)
+        else if (e.type === "turn/start") push((e as { workspace?: unknown }).workspace)
+      }
+    } catch {
+      return []
+    }
+    return out
+  }
+
   /**
    * 这条 determinism 请求该用哪个工作区。优先级：**会话自己用过的** > 显式参数 > 启动时的。
+   *
+   * ⚠ **尚未接线**（2026-10-12 测试轮确认）：当前 dispatch 没有任何调用方——
+   * TS-060 的 checkpoint/undo 桌面层（preload 暴露、tsAgent.js、main.js IPC）从未实现，
+   * 这里连同 sessionWorkspaces 是那次修复的未完成部分。做 TS-060 时从这里接上；
+   * 逻辑本身已有 e2e 覆盖（scripts/e2e-agent-sdk.mjs），别重写。
    *
    * 为什么要绕这圈：影子仓库与隔离副本都**按工作区分目录**，而 SDK 启动时那个
    * `--workspace` 只是个默认值。TS-060 界面实测就是栽在这里（列表永远是空的、

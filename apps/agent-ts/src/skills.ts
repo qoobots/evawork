@@ -63,13 +63,18 @@ function readDir(dir: string): string[] {
 export interface SkillMeta {
   name: string
   description: string
+  /**
+   * 触发词（frontmatter `trigger:`，文档 19 P1-9[0]）：逗号分隔的关键词，
+   * 帮模型判"这个技能跟当前任务沾不沾边"。没有就只靠 description 判断。
+   */
+  trigger?: string
 }
 
 /**
  * 从一个技能目录取正文与描述（目录名即技能名，与 catalog.js / desktop-node 一致）。
  * front-matter 的 `description` 优先；没有则取首段纯文本。
  */
-function readSkill(rootDir: string, name: string): { body: string; description: string } | null {
+function readSkill(rootDir: string, name: string): { body: string; description: string; trigger?: string } | null {
   const file = path.join(rootDir, name, "SKILL.md")
   if (!fs.existsSync(file)) return null
   let raw = ""
@@ -92,28 +97,51 @@ function readSkill(rootDir: string, name: string): { body: string; description: 
       .find((p) => p.trim())
     description = (first || "").replace(/\s+/g, " ").trim().slice(0, 120)
   }
-  return { body: raw, description }
+  let trigger: string | undefined
+  const t = /^[ \t]*trigger[ \t]*:[ \t]*(.+)$/m.exec(meta)
+  if (t) trigger = t[1].trim().replace(/\s+/g, " ").replace(/^["']|["']$/g, "") || undefined
+  return { body: raw, description, trigger }
 }
 
-/** 内置技能的"名称 + 一句话描述"清单（供系统提示注入）。 */
+/**
+ * 可注入清单（内置 + 通用技能库，按名去重、内置优先）。
+ *
+ * 此前清单只列内置目录，`bundleSkillDir()` 只在 loadSkillByName 里当 fallback——
+ * 结果模型**不知道**技能库里还有什么，永远不会主动去 load（P1-9[5]）。
+ * 现在两个目录都列；真膨胀到上百条时再做按项目过滤，现在先让存在被看见。
+ */
 export function builtinSkillList(): SkillMeta[] {
-  const dir = builtinSkillDir()
   const out: SkillMeta[] = []
-  for (const name of readDir(dir)) {
-    const s = readSkill(dir, name)
-    if (s) out.push({ name, description: s.description || "（无描述）" })
+  const seen = new Set<string>()
+  for (const dir of [builtinSkillDir(), bundleSkillDir()]) {
+    for (const name of readDir(dir)) {
+      const key = name.toLowerCase()
+      if (seen.has(key)) continue
+      const s = readSkill(dir, name)
+      if (!s) continue
+      seen.add(key)
+      out.push({ name, description: s.description || "（无描述）", trigger: s.trigger })
+    }
   }
   return out
 }
 
-/** 系统提示节：列出可用内置技能，并告诉模型用 load_skill 加载正文。无技能时返回 null（整节消失）。 */
+/**
+ * 系统提示节：列出可用技能，并告诉模型用 load_skill 加载正文。无技能时返回 null（整节消失）。
+ *
+ * 用 `<system-reminder>` 包裹（对齐 Claude Code，P1-9[1]）：这是"运行时注入的可变清单"，
+ * 不是提示词的固定语义——标签让模型把它和"指令本身"区分开，清单增删也只动这一小节。
+ * （完整消息级注入要重排消息组装管线，收益不抵改动风险，这一节仍留在系统提示词内渲染，
+ * 但每轮本来就在重建，缓存影响面与消息级等价。）
+ */
 export function builtinSkillsSection(): string | null {
   const list = builtinSkillList()
   if (!list.length) return null
   return [
-    "## 可用技能（内置，无需安装）",
-    "以下技能随应用内置、每段对话默认可用。当任务与某个技能匹配时，调用 load_skill 把它的完整说明加载进本轮，再按其指示执行：",
-    ...list.map((s) => `- ${s.name}：${s.description}`),
+    "<system-reminder>",
+    "以下技能默认可用（内置 + 技能库，无需安装）。任务与某个技能匹配（看描述或触发词）时，调用 load_skill 把它的完整说明加载进本轮，再按其指示执行；同一技能本轮只加载一次。",
+    ...list.map((s) => `- ${s.name}：${s.description}${s.trigger ? `（触发词：${s.trigger}）` : ""}`),
+    "</system-reminder>",
   ].join("\n")
 }
 

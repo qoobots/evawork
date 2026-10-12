@@ -11,7 +11,7 @@ import fs from "node:fs"
 import path from "node:path"
 import { homeDir } from "./session.ts"
 import { allTools, findTool, installMcpTools, stopMcp } from "./tools.ts"
-import { registerDelegateTool } from "./subagent.ts"
+import { registerDelegateTool, registerHandbackTool } from "./subagent.ts"
 import { registerJobTools } from "./jobs.ts"
 import { registerOfficeTools } from "./office-tools.ts"
 import { SystemPrompt } from "./prompt.ts"
@@ -111,7 +111,13 @@ function once(name: string, fn: () => void): void {
 export async function applyManifest(m: BootManifest): Promise<BootedRuntime> {
   // 遥测可关：它是"可观测"，不是"必须有"；关掉不影响任何功能
   if (!m.modules.telemetry) telemetry.disable()
-  if (m.modules.subagent) once("delegate", registerDelegateTool)
+  /* handback 与 delegate 同进退：它是子代理的交付通道（文档 19 P0-3），
+     delegate 在就得在，delegate 关它就无意义。注册了也**永不进主任务暴露名单**
+     （见下面 excluded.add），主任务看不见才不会被误调。 */
+  if (m.modules.subagent) {
+    once("delegate", registerDelegateTool)
+    once("handback", registerHandbackTool)
+  }
   if (m.modules.jobs) once("job_start", registerJobTools)
   if (m.modules.office) once("create_document", registerOfficeTools)
 
@@ -122,6 +128,10 @@ export async function applyManifest(m: BootManifest): Promise<BootedRuntime> {
   for (const [id, body] of Object.entries(m.prompt.set)) prompt.setText(id, body)
 
   const excluded = new Set(m.exclude)
+  /* handback 是子代理独立上下文里的交付通道（文档 19 P0-3），**永不进主任务暴露名单**：
+     主任务看不见它才不会被误调"交付掉自己的一轮"。工具本身照常注册（runSubagent 的
+     白名单要引用它），ctx.subtask 闸是第二层防御，这里是第一层。 */
+  excluded.add("handback")
   // 关掉的模块：它带来的工具一律不进暴露名单（注册过也不给模型用）
   for (const [mod, names] of Object.entries(MODULE_TOOLS)) {
     if (!m.modules[mod as keyof BootManifest["modules"]]) for (const n of names) excluded.add(n)

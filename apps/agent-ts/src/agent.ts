@@ -10,7 +10,7 @@
 import { runTurn } from "./loop.ts"
 import type { StopReason, TurnOptions, TurnResult } from "./loop.ts"
 import { newSessionId } from "./session.ts"
-import type { SessionEvent } from "./types.ts"
+import type { InboxMessage, SessionEvent } from "./types.ts"
 
 export type AgentStatus = "idle" | "running" | "stopping" | "done" | "stopped" | "error"
 
@@ -18,7 +18,7 @@ export type AgentStatus = "idle" | "running" | "stopping" | "done" | "stopped" |
 export type AgentEvent =
   | { type: "agent/status"; status: AgentStatus; note?: string }
   | { type: "agent/step"; step: number }
-  | { type: "agent/inbox"; step: number; message: string }
+  | { type: "agent/inbox"; step: number; message: string; source?: "user" | "system" }
   | { type: "agent/request"; step: number; messages: number }
   | { type: "agent/continuation"; step: number; reason: string; tools?: string[] }
   | { type: "agent/turn-stopping"; reason: StopReason; steps: number; note: string }
@@ -28,8 +28,12 @@ export interface Agent {
   readonly status: AgentStatus
   /** 跑一个目标（一轮 turn）。 */
   run(goal: string): Promise<TurnResult>
-  /** 中途插话：消息在**下一个 step 边界**进入对话，不打断正在跑的那一步。 */
-  inbox(message: string): void
+  /**
+   * 中途插话：消息在**下一个 step 边界**进入对话，不打断正在跑的那一步。
+   * `source` 缺省 "user"；系统转发（后台任务通知等）必须显式给 "system"——
+   * loop 会据此补"非用户输入"声明（文档 19 P0-4），界面也据此区分渲染。
+   */
+  inbox(message: string, source?: "user" | "system"): void
   /** 请求停止：协作式，走到当前 step 边界就停（已产出的正文保留）。 */
   stop(reason?: string): void
   /** 订阅活事件，返回取消订阅函数。 */
@@ -46,7 +50,7 @@ export interface AgentOptions {
 export class DefaultAgent implements Agent {
   readonly id: string
   private listeners = new Set<(e: AgentEvent) => void>()
-  private queue: string[] = []
+  private queue: InboxMessage[] = []
   private controller = new AbortController()
   private st: AgentStatus = "idle"
   private opts: AgentOptions
@@ -68,9 +72,9 @@ export class DefaultAgent implements Agent {
     }
   }
 
-  inbox(message: string): void {
+  inbox(message: string, source: "user" | "system" = "user"): void {
     const m = String(message || "").trim()
-    if (m) this.queue.push(m)
+    if (m) this.queue.push({ message: m, source })
   }
 
   stop(_reason?: string): void {
