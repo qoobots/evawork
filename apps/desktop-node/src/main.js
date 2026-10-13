@@ -1324,13 +1324,25 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => {
-  if (tsAgentHost) void tsAgentHost.stop(); // 子进程要跟着退出，不能残留
+  /* 子进程要跟着退出，不能残留。stop() 是**异步**的（要先发 shutdown 等应答），
+     而这里不会等它——所以先同步 kill 一次（应用退出路径不做协商，见
+     TsAgentHost.kill 的注释），stop() 只作为兜底收尾。
+     不这么做的话：主进程先走，子进程成孤儿接着跑，正在执行的 delegate
+     子代理也一样，用户看到"窗口都关了它还在后台改文件"。 */
+  if (tsAgentHost) {
+    tsAgentHost.kill();
+    void tsAgentHost.stop();
+  }
   if (uiServer) uiServer.close();
   if (process.platform !== 'darwin') app.quit();
 });
 
 app.on('before-quit', () => {
-  if (tsAgentHost) void tsAgentHost.stop();
+  // 同上：退出钩子里必须同步杀，异步 stop 来不及
+  if (tsAgentHost) {
+    tsAgentHost.kill();
+    void tsAgentHost.stop();
+  }
 });
 
 app.on('will-quit', () => {

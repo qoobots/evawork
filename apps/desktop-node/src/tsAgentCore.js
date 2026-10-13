@@ -230,8 +230,7 @@ class TsAgent extends EventEmitter {
   }
 
   /** 停：先礼貌 shutdown，超时再 kill（协作式取消之后进程可能还在收尾）。 */
-  async stop(graceMs = 3000) {
-    if (!this.running) return;
+  async stop(graceMs = 3000) {    if (!this.running) return;
     try {
       await this.request('shutdown', {}, 2000);
     } catch {
@@ -248,6 +247,19 @@ class TsAgent extends EventEmitter {
         resolve();
       });
     });
+  }
+
+  /**
+   * 立刻结束（不协商）：**进程退出路径专用**。
+   *
+   * 为什么不能只靠 stop()：它是异步的（要先发 shutdown 并等应答，最长 graceMs），
+   * 而 Electron 的 `before-quit` / `window-all-closed` **不会等它**——
+   * 主进程一走，这个子进程就变成孤儿接着跑（子代理、它派出的 run_command 一起），
+   * 用户看到的就是"应用关了、智能体还在后台干活"。
+   */
+  kill() {
+    if (!this.running) return;
+    try { this.proc.kill(); } catch { /* 已退出 */ }
   }
 }
 

@@ -273,6 +273,36 @@ console.log(`Mock server: ${mockBaseUrl}\n`);
     check('runSubagent 无 handback → handback=false', result.handback === false);
     check('runSubagent 无 handback → text 正确', result.text === '直接文本输出');
   }
+
+  // 3d. 取消信号穿透（2026-10-13「停不掉的子代理」）
+  // 父任务被取消时子代理必须跟着停：此前 runSubagent 根本没接 signal，
+  // 用户点了停止、界面上这一轮已经收尾，子代理却还在后台一路调模型、改文件，
+  // 而且没有任何入口能再停它。
+  {
+    const ctl = new AbortController();
+    let streamCalls = 0;
+    const stream = async function* () {
+      streamCalls += 1;
+      yield { type: 'text', text: '子代理正在干活' };
+      ctl.abort(); // 模拟父任务在这一步的模型流进行中被取消
+      yield { type: 'done', finish: 'stop' };
+    };
+    const log = new sessionMod.SessionLog('test-parent-cancel', { kind: 'root', goal: 'cancel' });
+    const result = await subagentMod.runSubagent({
+      goal: '会被取消的任务',
+      cfg,
+      workspace,
+      parentLog: log,
+      stream,
+      signal: ctl.signal,
+    });
+    check('runSubagent(取消) → stopReason=cancelled', result.stopReason === 'cancelled', result.stopReason);
+    check('runSubagent(取消) → 只请求了一次（没继续下一步）', streamCalls === 1, `streamCalls=${streamCalls}`);
+    check(
+      'runSubagent(取消) → 父日志如实落 subagent/result(cancelled)',
+      log.events().some((e) => e.type === 'subagent/result' && e.stop === 'cancelled'),
+    );
+  }
 }
 
 // ======================================================================
@@ -323,6 +353,23 @@ console.log(`Mock server: ${mockBaseUrl}\n`);
     const result1 = await delegateTool.execute({ goal: '测试' }, ctx1);
     check('delegate(缺 cfg/log) → ok=false', result1.ok === false);
     check('delegate(缺 cfg/log) → error 提及通道', result1.error?.includes('模型通道') || result1.error?.includes('事件日志'));
+  }
+
+  // 4e. ctx.signal 必须透传（父任务已取消 → 子代理一步都不该跑）
+  {
+    const parentLog = new sessionMod.SessionLog('test-delegate-cancel', { kind: 'root', goal: 'cancel' });
+    const cfg = { baseUrl: mockBaseUrl, token: 'test', model: 'mock' };
+    const ctl = new AbortController();
+    ctl.abort();
+    mockRequests = [];
+    mockNextResponse = { type: 'handback', text: '不该出现的交付' };
+    const result = await delegateTool.execute(
+      { goal: '父任务已取消，这个子代理不该跑' },
+      { workspace, cfg, log: parentLog, subtask: false, signal: ctl.signal },
+    );
+    check('delegate(父任务已取消) → ok=false', result.ok === false, String(result.output || result.error || '').slice(0, 80));
+    check('delegate(父任务已取消) → 一个模型请求都没发', mockRequests.length === 0, `发出 ${mockRequests.length} 个请求`);
+    check('delegate(父任务已取消) → 交付里没有子代理结论', !String(result.output || '').includes('不该出现的交付'));
   }
 }
 

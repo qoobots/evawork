@@ -54,6 +54,16 @@ export interface SubagentOptions {
   system?: string
   stream?: StreamFn
   onEvent?: (e: SessionEvent) => void
+  /**
+   * 父任务的取消信号（**必须传**，见 2026-10-13 的"停不掉的子代理"事故）。
+   *
+   * 子代理跑的是自己那个 runTurn、自己的模型流。父任务收到 AbortSignal 只会让
+   * **父**那一轮停下，子代理照旧一路调模型到自结束——用户点了停止，界面上这一轮
+   * 已经收尾，后台却还在烧钱、还在改文件，而且没有任何入口能再停它。
+   * 所以信号必须原样透传：模型流被 abort 掐断，子代理在下一个 step 边界如实
+   * 报 `cancelled` 收尾（子代理自己的工具也已按 ctx.signal 支持取消）。
+   */
+  signal?: AbortSignal
 }
 
 export interface SubagentResult extends TurnResult {
@@ -162,6 +172,9 @@ export async function runSubagent(o: SubagentOptions): Promise<SubagentResult> {
     cfg: o.cfg,
     workspace: o.workspace,
     log,
+    /* 父任务的取消信号原样透传：用户点"停止"要能停住**子代理**，否则这一轮
+       表面上收尾了、后台还在调模型改文件（见 SubagentOptions.signal 的注释）。 */
+    signal: o.signal,
     // 子代理生命周期短、几乎撞不到上下文压缩，别为它多付一次归档调用
     archiveDropped: false,
     tools,
@@ -262,6 +275,9 @@ export function registerDelegateTool(): void {
         parentLog: log,
         role,
         tools: list.length ? list : undefined,
+        // 取消必须穿透到子代理：用户在界面上点"停止"，停的是这一轮，
+        // 而子代理是这一轮里唯一还在动的活（2026-10-13 的"停不掉的子代理"）。
+        signal: ctx.signal,
       })
       // subagent 轨迹：给界面那张卡（T-090）。**只给人看**，不进模型消息。
       // 交付文本加保险上限（P0-2[15]）：话多的子代理不能把主上下文撑爆。
