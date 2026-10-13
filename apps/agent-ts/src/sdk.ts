@@ -109,6 +109,11 @@ export async function serve(opts: ServeOptions): Promise<void> {
         /* S-25：自带通道（BYOK）。地址与 Key 由主进程在**这一轮**注入，子进程不留
            副本、不落盘——它与 EVA 通道是两条互不影响的凭据来源。 */
         ...(route.baseUrl ? { baseUrl: route.baseUrl, token: route.token ?? "" } : {}),
+        /* EVA 令牌也**逐轮覆盖**（2026-10-13 实测的 401）：access_token 24h 一换，
+           而子进程的 EVA_AI_TOKEN 只是启动那一刻的快照。主进程静默续期成功后，
+           子进程仍拿着旧令牌，于是"界面显示已登录、每一步都 401"，点重试也没用
+           （重试不会重启子进程）。只覆盖 token、不带 baseUrl，地址仍取 env。 */
+        ...(!route.baseUrl && route.token ? { token: route.token } : {}),
       })
 
       const res = await runTurn({
@@ -344,9 +349,13 @@ export async function serve(opts: ServeOptions): Promise<void> {
          界面打开输入框就该能看见可选模型，而不是先跑一个任务才有。
          `force` 绕过 6h 缓存，供界面手动刷新。 */
       case "models/list": {
+        /* 与 session/prompt 同理：令牌可以逐次覆盖（主进程每次都把当前 access_token
+           递下来）。启动时注入的那份可能早已过期，而"拉不到模型清单"的提示
+           （登录态已失效）恰好是最常被看见的那个 401。 */
+        const modelToken = p.token === undefined || p.token === null ? "" : String(p.token)
         let cfg: ReturnType<typeof llmConfigFromEnv> | null = null
         try {
-          cfg = llmConfigFromEnv()
+          cfg = llmConfigFromEnv(modelToken ? { token: modelToken } : {})
         } catch (e) {
           return fail(-32004, `没有模型凭据：${String((e as Error).message)}`)
         }

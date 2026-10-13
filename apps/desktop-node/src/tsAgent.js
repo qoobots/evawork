@@ -260,16 +260,37 @@ class TsAgentHost {
       if (!r || !r.ok) throw new Error((r && r.reason) || 'TS 智能体启动失败');
     }
     const sid = await this.ensureSession(sessionId);
-    /* S-25：自带通道（`custom:<id>`）用它自己的地址与 Key——凭据由主进程持有
-       （userData/providers.json），只在**这一轮**经协议递给子进程：
-       子进程不自持登录态、不落盘，EVA 令牌也不必为此暴露。 */
+    /* 凭据逐轮递进子进程（S-25 自带通道 + 2026-10-13 的 EVA 令牌修复）：
+       · 自带通道（`custom:<id>`）用它自己的地址与 Key——存在 userData/providers.json，
+         只在**这一轮**经协议递过去，子进程不留副本、不落盘；
+       · EVA 通道则只递**当前** access_token（不带地址）。令牌 24h 一换，而子进程的
+         EVA_AI_TOKEN 是启动那一刻的快照：主进程静默续期成功后，子进程仍拿旧令牌，
+         于是"界面显示已登录、每一步都 401"，重试也不会重启子进程，永远好不了。
+         逐轮同步之后，续期在任何时刻都能立刻生效。 */
     const route = customRoute(model);
-    const r = await this.agent.prompt(sid, prompt, route ? { ...route } : { model });
+    const token = route ? '' : await this.freshEvaToken();
+    const r = await this.agent.prompt(sid, prompt, route ? { ...route } : { model, token });
     /* SDK 的 session/prompt 应答是 {sessionId, accepted:true}，**没有 ok 字段**；
        而渲染层契约（tsChannel.ts）查的是 r.ok——不在这里补上映射，
        每条消息都会被当成"未接受该请求"。这个断层从 TS-052 起就在：
        脚本直连 SDK 的验证永远测不到它，只有从界面真发一条才会现形。 */
     return { ok: true, ...r, sessionId: sid };
+  }
+
+  /**
+   * 当前可用的 EVA 访问令牌（顺带静默续期）。取不到返回空串。
+   *
+   * **不在这里拦**：真失效该由模型通道如实报 401，而不是主进程猜一句"登录过期"
+   * 把网络抖动也说成会话终态。取空时子进程退回 env 里那一份，行为与从前一致。
+   */
+  async freshEvaToken() {
+    try {
+      if (!iam.providerConfig().needToken) return ''; // 用的是用户自己的 provider，没有 EVA 令牌
+      return (await iam.accessToken()) || '';
+    } catch (e) {
+      this.log.warn('[ts-agent] 取最新 EVA 令牌失败：', (e && e.message) || e);
+      return '';
+    }
   }
 
   async cancel({ sessionId }) {
@@ -325,7 +346,10 @@ class TsAgentHost {
       return { ok: false, reason: up.reason, models: [] };
     }
     try {
-      const r = await this.agent.request('models/list', { force: !!force });
+      /* 同样递当前令牌：清单是最常被请求、也最容易撞上旧令牌的接口
+         （界面一打开就问，而子进程可能是几小时前起来的）。 */
+      const token = await this.freshEvaToken();
+      const r = await this.agent.request('models/list', { force: !!force, ...(token ? { token } : {}) });
       return { ok: true, ...r, models: [...custom, ...(Array.isArray(r.models) ? r.models : [])] };
     } catch (e) {
       const reason = String((e && e.message) || e);

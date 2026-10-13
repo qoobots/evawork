@@ -203,20 +203,26 @@ class TsAgent extends EventEmitter {
   }
 
   prompt(sessionId, text, opts = {}) {
-    /* model / 自带通道一起透传：子进程按**这一轮**的参数跑。
+    /* model / 凭据一起透传：子进程按**这一轮**的参数跑。
        此前只传 prompt，界面选的模型被主进程丢掉，模型下拉在 TS 模式下形同虚设。
-       `baseUrl`/`token` 只有自定义通道（BYOK）才有：地址与 Key 由主进程解析后
-       逐轮递进来，子进程不留副本、不落盘。 */
-    return this.request(
-      'session/prompt',
-      {
-        sessionId,
-        prompt: text,
-        ...(opts.model ? { model: String(opts.model) } : {}),
-        ...(opts.baseUrl ? { baseUrl: String(opts.baseUrl), token: String(opts.token || '') } : {}),
-      },
-      15000,
-    );
+       凭据有两种形状，必须分清：
+       · 自带通道（BYOK）：`baseUrl` 必须在，Key 可以为空（本地推理服务不校验）；
+       · EVA 通道：**只给 token**，地址仍用子进程 env 里的那份——access_token
+         24h 一换，而 env 只是启动时的快照，不逐轮带新的就是"界面已登录、任务 401"。
+       token 为空串时不带这个字段：让子进程继续用 env 里那份，
+       而不是把"这一刻没取到"变成"拿空令牌去请求"。 */
+    const params = {
+      sessionId,
+      prompt: text,
+      ...(opts.model ? { model: String(opts.model) } : {}),
+    };
+    if (opts.baseUrl) {
+      params.baseUrl = String(opts.baseUrl);
+      params.token = String(opts.token || '');
+    } else if (opts.token) {
+      params.token = String(opts.token);
+    }
+    return this.request('session/prompt', params, 15000);
   }
 
   cancel(sessionId) {

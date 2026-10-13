@@ -6,6 +6,8 @@
  *   1. initialize：capabilities 含 contract 字段与 methods/notifications 名单
  *   2. session/new → session/prompt（单轮文本）：通知序 session.status running →
  *      session.event/session.text → session.status idle 且 stop=completed、带 failed 字段
+ *   2b. 令牌逐轮覆盖：prompt 带 token 时，模型请求的 Authorization 用**这一轮的**令牌，
+ *      不带时退回子进程 env 里那份（2026-10-13 的 401 修复）
  *   3. session/cancel：慢流中途 cancel → 会话以停止语义收尾、进程不死、还能接新请求
  *   4. context/usage：空 sessionId 不报错、返回有用量字段
  *   5. session/list/rename/delete 闭环
@@ -50,6 +52,7 @@ function skip(label, reason) {
 
 // ---- Mock LLM 服务器 ----
 const requests = []; // 记录所有请求体（全局，跨轮次累积；测试 6 前会清空）
+const authSeen = []; // 与 requests 同索引：每个请求带的 Authorization（测令牌逐轮覆盖）
 // 响应计划：按请求序号（requests.length - 1 时的索引）决定回什么
 // 默认：所有请求都回文本收尾。测试 6 会覆盖。
 let responsePlan = null; // null = 默认文本；函数 (reqIndex, parsed) => 'toolcall_xxx' | 'text' | 'slow'
@@ -104,6 +107,7 @@ const server = http.createServer((req, res) => {
       const parsed = JSON.parse(body);
       const reqIndex = requests.length;
       requests.push(parsed);
+      authSeen.push(String(req.headers.authorization || ''));
 
       if (parsed.stream) {
         // 决定回什么
@@ -262,6 +266,31 @@ try {
   );
   check('收到 session.text 通知', hasTextNotify);
 
+  // ==== 2b. 令牌逐轮覆盖（2026-10-13 的 401 修复）====
+  // 子进程 env 里的 EVA_AI_TOKEN='test' 是"启动那一刻的快照"；主进程后续静默续期后
+  // 会把**当前**令牌随每一轮 prompt 递下来。这里断言覆盖真的生效——否则"界面已登录、
+  // 任务却每步 401"那个故障会原样回来（重试也不会重启子进程，永远好不了）。
+  console.log('\n--- 测试 2b: session/prompt 的 token 覆盖 env 令牌 ---');
+  responsePlan = null;
+  const tokSessionId = (await sendRequest('session/new', {})).result?.sessionId;
+  const beforeIdx = requests.length;
+  await sendRequest('session/prompt', {
+    sessionId: tokSessionId,
+    prompt: '带新令牌的一轮',
+    token: 'round-token-abc',
+  });
+  await sleep(1200);
+  check(
+    '2b: 本轮请求用的是随 prompt 递来的令牌',
+    authSeen[beforeIdx] === 'Bearer round-token-abc',
+    `实际 ${authSeen[beforeIdx]}`,
+  );
+  check(
+    '2b: 不带 token 的轮次仍用 env 令牌',
+    authSeen[beforeIdx - 1] === 'Bearer test',
+    `实际 ${authSeen[beforeIdx - 1]}`,
+  );
+
   // ==== 3. session/cancel ====
   console.log('\n--- 测试 3: session/cancel ---');
   responsePlan = () => 'slow'; // 慢流
@@ -326,6 +355,7 @@ try {
 
   const jobSessionId = (await sendRequest('session/new', {})).result?.sessionId;
   requests.length = 0; // 清空请求记录（之前的测试请求不算）
+  authSeen.length = 0; // 与 requests 保持同索引
   await sendRequest('session/prompt', { sessionId: jobSessionId, prompt: '发起后台任务' });
   await sleep(3000); // 等轮1 完成（2 个请求 + job_start 执行）
 
